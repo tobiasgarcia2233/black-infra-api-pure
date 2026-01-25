@@ -106,13 +106,14 @@ async def sync_pst():
         if not PST_API_KEY:
             raise HTTPException(status_code=500, detail="PST_API_KEY no configurada")
         
-        print(f"🔑 API Key: {PST_API_KEY[:8]}...{PST_API_KEY[-4:]}")
+        print(f"🔑 API Key (primeros 10 chars): {PST_API_KEY[:10]}")
+        print(f"🔑 API Key completa (parcial): {PST_API_KEY[:8]}...{PST_API_KEY[-4:]}")
         
         # 2. URLs a probar (estrategia de fallback)
         api_urls = [
-            "https://api.pst.net/api/v1/cards/balances",
             "https://api.pst.net/api/v1/balances",
-            "https://api.pst.net/v1/account/balances",
+            "https://api.pst.net/api/v1/user/balances",
+            "https://api.pst.net/api/v1/cards/balances",
         ]
         
         headers = {
