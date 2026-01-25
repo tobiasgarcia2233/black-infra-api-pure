@@ -5,12 +5,12 @@ BLACK INFRASTRUCTURE API
 API simple para sincronización con PST.NET
 
 Endpoints:
-- GET /sync-pst: Sincroniza balance USDT desde PST.NET
+- GET /sync-pst: Sincroniza balance USDT y cashback aprobado desde PST.NET
 - GET /ip: Obtiene la IP pública del servidor
 
 Autor: Senior Backend Developer
 Fecha: 23/01/2026
-Versión: 1.0.0
+Versión: 1.1.0
 """
 
 import os
@@ -30,7 +30,7 @@ from supabase import create_client, Client
 app = FastAPI(
     title="BLACK Infrastructure API",
     description="API para sincronización con PST.NET",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # CORS
@@ -58,9 +58,9 @@ async def root():
     return {
         "status": "ok",
         "service": "BLACK Infrastructure API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
-            "/sync-pst": "Sincroniza balance de PST.NET",
+            "/sync-pst": "Sincroniza balance y cashback aprobado de PST.NET",
             "/ip": "Obtiene IP pública del servidor"
         }
     }
@@ -91,8 +91,11 @@ async def get_ip():
 @app.post("/sync-pst")
 async def sync_pst():
     """
-    Sincroniza el balance USDT desde PST.NET
-    Aplica la regla del 50% y guarda en Supabase
+    Sincroniza el balance USDT y cashback aprobado desde PST.NET
+    - Consulta /api/v1/balances para obtener balance y cashback pendiente
+    - Consulta /api/v1/subscriptions/info para obtener cashback aprobado
+    - Aplica la regla del 50% al balance total
+    - Guarda todo en Supabase
     """
     print(f"\n{'='*60}")
     print(f"🔄 SINCRONIZACIÓN PST.NET - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -221,12 +224,45 @@ async def sync_pst():
         print(f"💰 Balance: ${balance_usdt}")
         print(f"💵 Cashback: ${cashback}")
         
+        # 6.5. Obtener cashback aprobado desde /subscriptions/info
+        print("\n🎁 Consultando cashback aprobado...")
+        approved_cashback = 0.0
+        subscription_url = "https://api.pst.net/api/v1/subscriptions/info"
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                sub_response = await client.get(subscription_url, headers=headers, timeout=15)
+                print(f"📥 Status subscriptions: {sub_response.status_code}")
+                
+                if sub_response.is_success:
+                    sub_data = sub_response.json()
+                    
+                    # Extraer approved_cashback (viene como string)
+                    approved_cashback_str = sub_data.get("approved_cashback", "0")
+                    
+                    # Si la respuesta tiene estructura data
+                    if isinstance(sub_data, dict) and "data" in sub_data:
+                        approved_cashback_str = sub_data["data"].get("approved_cashback", "0")
+                    
+                    # Convertir a float
+                    try:
+                        approved_cashback = float(approved_cashback_str or "0")
+                        print(f"✅ Cashback aprobado: ${approved_cashback}")
+                    except (ValueError, TypeError):
+                        print(f"⚠️  Error al parsear cashback aprobado: {approved_cashback_str}")
+                        approved_cashback = 0.0
+                else:
+                    print(f"⚠️  No se pudo obtener cashback aprobado: {sub_response.status_code}")
+        except Exception as e:
+            print(f"⚠️  Error al consultar cashback aprobado: {e}")
+        
         # 7. Aplicar regla del 50%
         total_disponible = balance_usdt + cashback
         neto_reparto = round((total_disponible / 2) * 100) / 100
         
         print(f"\n📊 Total: ${total_disponible}")
         print(f"📊 Neto 50%: ${neto_reparto}")
+        print(f"🎁 Cashback aprobado: ${approved_cashback}")
         
         # 8. Guardar en Supabase
         if SUPABASE_URL and SUPABASE_KEY:
@@ -234,7 +270,7 @@ async def sync_pst():
             
             supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
             
-            # Guardar en configuracion
+            # Guardar balance neto en configuracion
             supabase.table("configuracion").upsert({
                 "clave": "pst_balance_neto",
                 "valor_numerico": neto_reparto,
@@ -242,7 +278,17 @@ async def sync_pst():
                 "updated_at": datetime.now().isoformat()
             }, on_conflict="clave").execute()
             
-            print("✅ Configuración guardada")
+            print("✅ Balance neto guardado")
+            
+            # Guardar cashback aprobado en configuracion
+            supabase.table("configuracion").upsert({
+                "clave": "pst_cashback",
+                "valor_numerico": approved_cashback,
+                "descripcion": f"Cashback aprobado de PST.NET",
+                "updated_at": datetime.now().isoformat()
+            }, on_conflict="clave").execute()
+            
+            print("✅ Cashback aprobado guardado")
             
             # Guardar en ingresos (un registro por mes)
             fecha_actual = datetime.now().strftime("%Y-%m-%d")
@@ -281,6 +327,7 @@ async def sync_pst():
             "pst": {
                 "balance_usdt": balance_usdt,
                 "cashback": cashback,
+                "approved_cashback": approved_cashback,
                 "total_disponible": total_disponible,
                 "neto_reparto": neto_reparto
             },
