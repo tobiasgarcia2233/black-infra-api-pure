@@ -33,10 +33,14 @@ app = FastAPI(
     version="1.1.0"
 )
 
-# CORS
+# CORS - Permitir frontend de Vercel
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://black-infra-webapp-pure.vercel.app",
+        "http://localhost:3000",  # Para desarrollo local
+        "http://localhost:8000",  # Para testing local
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
