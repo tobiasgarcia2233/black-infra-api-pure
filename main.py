@@ -110,10 +110,9 @@ async def sync_pst():
         
         # 2. URLs a probar (estrategia de fallback)
         api_urls = [
-            "https://api.pst.net/api/v1/balances/",
-            "https://api.pst.net/api/v1/user/balances/",
-            "https://api.pst.net/v1/user/balances",
-            "https://api.pst.net/v1/balances",
+            "https://api.pst.net/api/v1/cards/balances",
+            "https://api.pst.net/api/v1/balances",
+            "https://api.pst.net/v1/account/balances",
         ]
         
         headers = {
@@ -131,7 +130,7 @@ async def sync_pst():
                 print(f"📍 Probando: {api_url}")
                 
                 try:
-                    test_response = await client.get(api_url, headers=headers, timeout=15)
+                    test_response = await client.get(api_url, headers=headers, timeout=20)
                     print(f"📥 Status: {test_response.status_code}")
                     
                     # Si es 401, endpoint correcto pero token inválido
@@ -231,7 +230,7 @@ async def sync_pst():
         
         try:
             async with httpx.AsyncClient() as client:
-                sub_response = await client.get(subscription_url, headers=headers, timeout=15)
+                sub_response = await client.get(subscription_url, headers=headers, timeout=20)
                 print(f"📥 Status subscriptions: {sub_response.status_code}")
                 
                 if sub_response.is_success:
