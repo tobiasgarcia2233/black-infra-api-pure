@@ -115,9 +115,9 @@ async def sync_pst():
         
         # 2. URLs a probar (estrategia de fallback)
         api_urls = [
+            "https://api.pst.net/account/get-all-accounts",
             "https://api.pst.net/api/v1/balances",
             "https://api.pst.net/api/v1/user/balances",
-            "https://api.pst.net/api/v1/cards/balances",
         ]
         
         headers = {
@@ -174,10 +174,40 @@ async def sync_pst():
         print("\n📊 Parseando respuesta...")
         data = response.json()
         
-        # 4. Extraer array de balances
+        # 4. Determinar si es respuesta de cuentas o balances
+        accounts_array = []
         balances_array = []
         
-        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+        # Si es array de cuentas (get-all-accounts)
+        if isinstance(data, list) and len(data) > 0 and "account_name" in data[0]:
+            print(f"✓ Respuesta de cuentas ({len(data)} cuentas)")
+            accounts_array = data
+            
+            # Buscar cuenta Master o usar la primera
+            master_account = None
+            for acc in accounts_array:
+                if "Master" in acc.get("account_name", ""):
+                    master_account = acc
+                    print(f"✅ Cuenta Master encontrada: {acc.get('account_name')}")
+                    break
+            
+            # Si no hay Master, usar la primera cuenta
+            if not master_account and accounts_array:
+                master_account = accounts_array[0]
+                print(f"⚠️  No hay cuenta Master, usando: {master_account.get('account_name')}")
+            
+            # Extraer balances de la cuenta
+            if master_account and "balances" in master_account:
+                balances_array = master_account["balances"]
+                print(f"✓ {len(balances_array)} balances en la cuenta")
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail="No se encontraron balances en las cuentas"
+                )
+        
+        # Si es respuesta de balances directos (fallback a APIs antiguas)
+        elif isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
             print(f"✓ Estructura: data.data ({len(data['data'])} elementos)")
             balances_array = data["data"]
         elif isinstance(data, list):
@@ -197,16 +227,16 @@ async def sync_pst():
         usdt_balance = None
         
         for item in balances_array:
-            currency = item.get("currency") or item.get("asset")
+            currency = item.get("currency") or item.get("asset") or item.get("symbol")
             if currency == "USDT":
                 usdt_balance = item
                 break
         
         if not usdt_balance:
-            currencies = [b.get("currency") or b.get("asset") for b in balances_array]
+            currencies = [b.get("currency") or b.get("asset") or b.get("symbol") for b in balances_array]
             raise HTTPException(
                 status_code=404,
-                detail=f"USDT no encontrado. Disponibles: {', '.join(currencies)}"
+                detail=f"USDT no encontrado. Disponibles: {', '.join(str(c) for c in currencies if c)}"
             )
         
         print("✅ USDT encontrado")
@@ -216,12 +246,14 @@ async def sync_pst():
             usdt_balance.get("balance") or 
             usdt_balance.get("available") or 
             usdt_balance.get("amount") or 
+            usdt_balance.get("available_balance") or
             0
         )
         cashback = float(
             usdt_balance.get("cashback_balance") or 
             usdt_balance.get("cashback") or 
             usdt_balance.get("rewards") or 
+            usdt_balance.get("reward_balance") or
             0
         )
         
