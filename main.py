@@ -326,14 +326,14 @@ async def sync_pst():
             
             print("✅ Cashback aprobado guardado")
             
-            # Guardar en ingresos (un registro por mes)
+            # Guardar en ingresos (un registro por mes usando periodo MM-YYYY)
             fecha_actual = datetime.now().strftime("%Y-%m-%d")
-            primer_dia_mes = datetime.now().replace(day=1).strftime("%Y-%m-%d")
+            periodo_actual = datetime.now().strftime("%m-%Y")  # Formato MM-YYYY
             
             ingreso_existente = supabase.table("ingresos")\
                 .select("id")\
                 .eq("concepto", "PST_REPARTO")\
-                .gte("fecha_cobro", primer_dia_mes)\
+                .eq("periodo", periodo_actual)\
                 .limit(1)\
                 .execute()
             
@@ -343,9 +343,10 @@ async def sync_pst():
                 supabase.table("ingresos").update({
                     "monto_usd_total": neto_reparto,
                     "monto_ars": 0,
-                    "fecha_cobro": fecha_actual
+                    "fecha_cobro": fecha_actual,
+                    "periodo": periodo_actual
                 }).eq("id", ingreso_id).execute()
-                print(f"✅ Ingreso actualizado (ID: {ingreso_id})")
+                print(f"✅ Ingreso actualizado (ID: {ingreso_id}, Periodo: {periodo_actual})")
             else:
                 # Crear nuevo
                 supabase.table("ingresos").insert({
@@ -353,9 +354,10 @@ async def sync_pst():
                     "monto_usd_total": neto_reparto,
                     "monto_ars": 0,
                     "fecha_cobro": fecha_actual,
+                    "periodo": periodo_actual,
                     "cliente_id": None
                 }).execute()
-                print("✅ Nuevo ingreso creado")
+                print(f"✅ Nuevo ingreso creado (Periodo: {periodo_actual})")
         
         # 9. Retornar resultado
         result = {
