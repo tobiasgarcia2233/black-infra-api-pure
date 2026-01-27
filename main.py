@@ -33,17 +33,21 @@ app = FastAPI(
     version="1.1.0"
 )
 
-# CORS - Permitir frontend de Vercel
+# CORS - Permitir frontend de Vercel (todos los dominios de Vercel)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://black-infra-webapp-pure.vercel.app",
+        "https://black-infra-dashboard.vercel.app",
+        "https://*.vercel.app",
         "http://localhost:3000",  # Para desarrollo local
         "http://localhost:8000",  # Para testing local
+        "*"  # Fallback temporal para debugging
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS", "PUT", "DELETE"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Variables de entorno
@@ -91,6 +95,20 @@ async def get_ip():
         raise HTTPException(status_code=500, detail=f"Error al obtener IP: {str(e)}")
 
 
+@app.options("/sync-pst")
+async def sync_pst_options():
+    """
+    Handler para preflight CORS request
+    """
+    return JSONResponse(
+        content={"message": "OK"},
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+            "Access-Control-Allow-Headers": "*",
+        }
+    )
+
 @app.get("/sync-pst")
 @app.post("/sync-pst")
 async def sync_pst():
@@ -114,10 +132,11 @@ async def sync_pst():
         print(f"🔑 API Key completa (parcial): {PST_API_KEY[:8]}...{PST_API_KEY[-4:]}")
         
         # 2. URLs a probar (estrategia de fallback)
+        # ACTUALIZACIÓN 27/01/2026: Endpoint oficial confirmado por soporte PST.NET
         api_urls = [
-            "https://api.pst.net/account/get-all-accounts",
-            "https://api.pst.net/api/v1/balances",
-            "https://api.pst.net/api/v1/user/balances",
+            "https://api.pst.net/integration/members/accounts",  # Endpoint oficial v2
+            "https://api.pst.net/account/get-all-accounts",      # Fallback v1 (legacy)
+            "https://api.pst.net/api/v1/balances",               # Fallback v0 (deprecated)
         ]
         
         headers = {
@@ -178,23 +197,65 @@ async def sync_pst():
         accounts_array = []
         balances_array = []
         
-        # Si es array de cuentas (get-all-accounts)
-        if isinstance(data, list) and len(data) > 0 and "account_name" in data[0]:
-            print(f"✓ Respuesta de cuentas ({len(data)} cuentas)")
-            accounts_array = data
+        # Caso 1: Respuesta con estructura data.data (Integration API)
+        if isinstance(data, dict) and "data" in data:
+            inner_data = data["data"]
             
-            # Buscar cuenta Master o usar la primera
+            # Si data.data es un array de cuentas
+            if isinstance(inner_data, list) and len(inner_data) > 0:
+                # Check si tiene estructura de cuenta
+                if "account_name" in inner_data[0] or "type" in inner_data[0] or "role" in inner_data[0]:
+                    print(f"✓ Estructura data.data con cuentas ({len(inner_data)} cuentas)")
+                    accounts_array = inner_data
+                else:
+                    # Es un array de balances directo
+                    print(f"✓ Estructura data.data con balances ({len(inner_data)} balances)")
+                    balances_array = inner_data
+        
+        # Caso 2: Respuesta con data.accounts
+        elif isinstance(data, dict) and "accounts" in data and isinstance(data["accounts"], list):
+            print(f"✓ Estructura data.accounts ({len(data['accounts'])} cuentas)")
+            accounts_array = data["accounts"]
+        
+        # Caso 3: Array directo de cuentas (get-all-accounts legacy)
+        elif isinstance(data, list) and len(data) > 0 and "account_name" in data[0]:
+            print(f"✓ Array directo de cuentas ({len(data)} cuentas)")
+            accounts_array = data
+        
+        # Caso 4: Array directo de balances
+        elif isinstance(data, list):
+            print(f"✓ Array directo de balances ({len(data)} balances)")
+            balances_array = data
+        
+        # Caso 5: data.balances
+        elif isinstance(data, dict) and "balances" in data and isinstance(data["balances"], list):
+            print(f"✓ Estructura data.balances ({len(data['balances'])} balances)")
+            balances_array = data["balances"]
+        
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Formato de respuesta inesperado. Estructura: {list(data.keys()) if isinstance(data, dict) else 'array'}"
+            )
+        
+        # Si tenemos cuentas, buscar Master y extraer balances
+        if accounts_array:
             master_account = None
+            
+            # Buscar cuenta Master o la de mayor balance
             for acc in accounts_array:
-                if "Master" in acc.get("account_name", ""):
+                acc_name = acc.get("account_name", "")
+                acc_type = (acc.get("type") or acc.get("role") or "").lower()
+                
+                if "master" in acc_name.lower() or "master" in acc_type:
                     master_account = acc
-                    print(f"✅ Cuenta Master encontrada: {acc.get('account_name')}")
+                    print(f"✅ Cuenta Master encontrada: {acc_name or acc_type}")
                     break
             
             # Si no hay Master, usar la primera cuenta
             if not master_account and accounts_array:
                 master_account = accounts_array[0]
-                print(f"⚠️  No hay cuenta Master, usando: {master_account.get('account_name')}")
+                print(f"⚠️  No hay cuenta Master, usando primera cuenta")
             
             # Extraer balances de la cuenta
             if master_account and "balances" in master_account:
@@ -205,22 +266,6 @@ async def sync_pst():
                     status_code=500,
                     detail="No se encontraron balances en las cuentas"
                 )
-        
-        # Si es respuesta de balances directos (fallback a APIs antiguas)
-        elif isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-            print(f"✓ Estructura: data.data ({len(data['data'])} elementos)")
-            balances_array = data["data"]
-        elif isinstance(data, list):
-            print(f"✓ Array directo ({len(data)} elementos)")
-            balances_array = data
-        elif isinstance(data, dict) and "balances" in data and isinstance(data["balances"], list):
-            print(f"✓ data.balances ({len(data['balances'])} elementos)")
-            balances_array = data["balances"]
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail="Formato de respuesta inesperado"
-            )
         
         # 5. Buscar balance USDT
         print("\n💰 Buscando USDT...")
