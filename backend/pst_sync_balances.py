@@ -6,7 +6,7 @@ Sincroniza el balance USDT desde PST.NET y calcula la regla del 50%
 
 Autor: Senior Backend Developer
 Fecha: 23/01/2026
-Versión: 2.1.0 - INDESTRUCTIBLE EDITION + MULTI-HEADER AUTH
+Versión: 3.0.0 - SUMATORIA TOTAL USD + USDT + CASHBACK
 
 MEJORAS DE ROBUSTEZ (v2.0.0 - 27/01/2026):
 ==========================================
@@ -26,10 +26,21 @@ NUEVAS FUNCIONALIDADES (v2.1.0 - 27/01/2026):
 🛡️ PARSEO SEGURO: JSON parsing con try-catch para respuestas inválidas
 📊 LOGS MEJORADOS: Indica qué formato de header funcionó
 
+CAMBIO CRÍTICO (v3.0.0 - 27/01/2026):
+====================================
+💰 SUMATORIA TOTAL: Ya NO busca solo cuenta "Master"
+   - Itera TODAS las cuentas recibidas
+   - Suma todos los balances con currency_id = 1 (USD)
+   - Suma todos los balances con currency_id = 2 (USDT)
+   - Extrae cashback global del objeto de respuesta
+   - Fórmula: (Total USD + Total USDT + Cashback Global) / 2
+📊 LOGS DETALLADOS: Muestra desglose por cuenta y totales
+🎯 PRECISIÓN: Refleja exactamente lo que el usuario ve en dashboard
+
 ARQUITECTURA DE EXTRACCIÓN:
-- Estrategia 1: Búsqueda recursiva profunda (hasta 5 niveles)
-- Estrategia 2: Métodos clásicos (balance directo, arrays, objetos)
-- Estrategia 3: Búsqueda profunda con función recursiva nested
+- Busca en todas las cuentas por currency_id (1=USD, 2=USDT)
+- Suma acumulativa de todos los balances encontrados
+- Cashback global extraído del objeto raíz de respuesta
 
 ENDPOINT OFICIAL (confirmado por soporte PST.NET):
 - GET /integration/members/accounts
@@ -461,70 +472,170 @@ def sincronizar_balance_pst() -> Dict:
                 print(f"⚠️  Error al procesar cuenta: {e}")
                 return None
         
-        # Buscar todas las cuentas con USDT (con máximo blindaje)
-        cuentas_usdt = []
+        # NUEVA LÓGICA: Sumar TODOS los balances USD + USDT de todas las cuentas
+        print(f"\n💰 SUMANDO TODOS LOS BALANCES (USD + USDT) DE TODAS LAS CUENTAS...")
+        print(f"📋 Analizando {len(accounts_array)} cuentas...\n")
+        
+        total_usd = 0.0
+        total_usdt = 0.0
+        cuentas_procesadas = 0
         errores_procesamiento = []
         
+        def extraer_balance_por_currency_id(cuenta_item):
+            """
+            Extrae balances USD y USDT basándose en currency_id.
+            Retorna dict con 'usd' y 'usdt' o None
+            """
+            try:
+                balances_encontrados = {'usd': 0.0, 'usdt': 0.0}
+                
+                # Buscar array de balances en la cuenta
+                balances_array = None
+                
+                if 'balances' in cuenta_item and isinstance(cuenta_item.get('balances'), list):
+                    balances_array = cuenta_item['balances']
+                elif 'balance' in cuenta_item and isinstance(cuenta_item.get('balance'), dict):
+                    balances_array = [cuenta_item['balance']]
+                elif 'currency_id' in cuenta_item:
+                    # La cuenta misma es un balance
+                    balances_array = [cuenta_item]
+                
+                if not balances_array:
+                    return None
+                
+                # Procesar cada balance
+                for bal in balances_array:
+                    if not isinstance(bal, dict):
+                        continue
+                    
+                    currency_id = bal.get('currency_id')
+                    
+                    # Extraer valor del balance
+                    balance_valor = bal.get('balance') or bal.get('available') or bal.get('amount') or bal.get('total') or 0
+                    
+                    try:
+                        balance_float = float(balance_valor)
+                    except (ValueError, TypeError):
+                        continue
+                    
+                    # Sumar según currency_id
+                    if currency_id == 1:  # USD
+                        balances_encontrados['usd'] += balance_float
+                    elif currency_id == 2:  # USDT
+                        balances_encontrados['usdt'] += balance_float
+                
+                # Solo retornar si encontramos algo
+                if balances_encontrados['usd'] > 0 or balances_encontrados['usdt'] > 0:
+                    return balances_encontrados
+                
+                return None
+                
+            except Exception as e:
+                print(f"⚠️  Error extrayendo balances: {e}")
+                return None
+        
+        # Iterar todas las cuentas
         for idx, item in enumerate(accounts_array):
             try:
                 print(f"  🔍 Cuenta {idx + 1}/{len(accounts_array)}: ", end='')
                 
-                # Obtener información de la cuenta (tolerante a fallos)
+                # Obtener nombre/tipo de cuenta (opcional, para logging)
                 try:
-                    account_type = str(item.get('type') or item.get('account_type') or item.get('role') or item.get('name') or 'Unknown').lower()
-                except Exception as e:
-                    account_type = f'unknown_error_{idx}'
-                    print(f"⚠️  Error obteniendo tipo: {e}", end=' ')
+                    account_name = str(item.get('account_name') or item.get('name') or item.get('type') or f'Cuenta_{idx+1}')
+                except Exception:
+                    account_name = f'Cuenta_{idx+1}'
                 
-                print(f"Tipo: {account_type}", end='')
+                print(f"{account_name[:30]}", end=' ')
                 
-                # Intentar extraer balance USDT
-                resultado = extraer_balance_usdt(item)
+                # Extraer balances USD y USDT
+                resultado = extraer_balance_por_currency_id(item)
+                
                 if resultado:
-                    balance, cashback, cuenta = resultado
-                    es_master = 'master' in account_type
-                    cuentas_usdt.append({
-                        'balance': balance,
-                        'cashback': cashback,
-                        'cuenta': cuenta,
-                        'type': account_type,
-                        'es_master': es_master,
-                        'index': idx
-                    })
-                    print(f" ✅ USDT: ${balance} {'🏆 MASTER' if es_master else ''}")
+                    usd = resultado['usd']
+                    usdt = resultado['usdt']
+                    
+                    if usd > 0:
+                        total_usd += usd
+                        print(f"💵 USD: ${usd:,.2f}", end=' ')
+                        cuentas_procesadas += 1
+                    
+                    if usdt > 0:
+                        total_usdt += usdt
+                        print(f"💰 USDT: ${usdt:,.2f}", end=' ')
+                        cuentas_procesadas += 1
+                    
+                    print("✅")
                 else:
-                    print(f" ⏭️  Sin USDT")
+                    print("⏭️  Sin USD/USDT")
                     
             except Exception as e:
                 error_msg = f"Error procesando cuenta {idx + 1}: {str(e)}"
-                print(f" ❌ {error_msg}")
+                print(f"❌ {error_msg}")
                 errores_procesamiento.append(error_msg)
-                # Continuar con la siguiente cuenta
                 continue
         
-        # Si hubo errores de procesamiento, loguearlos
+        # Logging de errores si hubo
         if errores_procesamiento:
-            print(f"\n⚠️  Se encontraron {len(errores_procesamiento)} errores durante el procesamiento:")
-            for err in errores_procesamiento:
+            print(f"\n⚠️  Se encontraron {len(errores_procesamiento)} errores:")
+            for err in errores_procesamiento[:5]:  # Mostrar máximo 5
                 print(f"   - {err}")
         
-        # BLINDAJE: Si no encontramos cuentas USDT, NO fallar con 500
-        # Retornar success=True con balance 0 y mensaje informativo
-        if not cuentas_usdt:
-            warning_msg = f"No se encontró ninguna cuenta con balance USDT > 0. Total cuentas analizadas: {len(accounts_array)}"
-            print(f"\n⚠️  {warning_msg}")
-            print(f"🛡️  MODO SEGURO: Retornando balance 0 para evitar errores en frontend")
+        # Buscar CASHBACK GLOBAL en el objeto de respuesta principal
+        print(f"\n🎁 Buscando cashback global en respuesta...")
+        cashback_global = 0.0
+        
+        try:
+            # El cashback puede venir en varios lugares
+            if isinstance(data, dict):
+                # Opción 1: data.cashback
+                cashback_global = float(data.get('cashback') or data.get('cashback_balance') or data.get('total_cashback') or 0)
+                
+                # Opción 2: data.data.cashback
+                if cashback_global == 0 and 'data' in data and isinstance(data['data'], dict):
+                    cashback_global = float(data['data'].get('cashback') or data['data'].get('cashback_balance') or 0)
+                
+                # Opción 3: Buscar en metadata
+                if cashback_global == 0 and 'metadata' in data and isinstance(data['metadata'], dict):
+                    cashback_global = float(data['metadata'].get('cashback') or 0)
             
-            # Retornar resultado "exitoso" con balance en 0
+            if cashback_global > 0:
+                print(f"✅ Cashback global encontrado: ${cashback_global:,.2f}")
+            else:
+                print(f"⚠️  No se encontró cashback global en la respuesta (usando 0)")
+                
+        except Exception as e:
+            print(f"⚠️  Error extrayendo cashback global: {e}")
+            cashback_global = 0.0
+        
+        # Calcular totales
+        print(f"\n{'='*60}")
+        print(f"📊 RESUMEN DE BALANCES:")
+        print(f"{'='*60}")
+        print(f"💵 Total USD:        ${total_usd:>12,.2f}")
+        print(f"💰 Total USDT:       ${total_usdt:>12,.2f}")
+        print(f"🎁 Cashback Global:  ${cashback_global:>12,.2f}")
+        print(f"{'─'*60}")
+        
+        total_disponible = total_usd + total_usdt + cashback_global
+        print(f"💎 TOTAL DISPONIBLE: ${total_disponible:>12,.2f}")
+        print(f"{'='*60}")
+        
+        # BLINDAJE: Si no hay balance, retornar modo seguro
+        if total_disponible == 0:
+            warning_msg = f"No se encontraron balances USD/USDT. Cuentas procesadas: {len(accounts_array)}"
+            print(f"\n⚠️  {warning_msg}")
+            print(f"🛡️  MODO SEGURO: Retornando balance 0")
+            
             return {
                 'success': True,
                 'pst': {
+                    'balance_usd': 0.0,
                     'balance_usdt': 0.0,
                     'cashback': 0.0,
                     'total_disponible': 0.0,
                     'neto_reparto': 0.0
                 },
-                'message': 'PST sincronizado: Sin balance USDT disponible',
+                'message': 'PST sincronizado: Sin balances disponibles',
                 'warning': warning_msg,
                 'fecha': datetime.now().isoformat(),
                 'endpoint_usado': api_url,
@@ -532,34 +643,16 @@ def sincronizar_balance_pst() -> Dict:
                 'modo_seguro': True
             }
         
-        # Seleccionar la mejor cuenta: Master primero, luego la de mayor balance
-        print(f"\n🎯 Seleccionando cuenta óptima de {len(cuentas_usdt)} candidatas...")
+        # 6. Asignar valores para el resto del código
+        balance_usd = total_usd
+        balance_usdt = total_usdt
+        cashback = cashback_global
         
-        cuenta_seleccionada = None
-        
-        # Prioridad 1: Cuenta Master
-        cuentas_master = [c for c in cuentas_usdt if c['es_master']]
-        if cuentas_master:
-            cuenta_seleccionada = max(cuentas_master, key=lambda x: x['balance'])
-            print(f"✅ Usando cuenta Master (balance: ${cuenta_seleccionada['balance']})")
-        else:
-            # Prioridad 2: Cuenta con mayor balance
-            cuenta_seleccionada = max(cuentas_usdt, key=lambda x: x['balance'])
-            print(f"✅ Usando cuenta con mayor balance: {cuenta_seleccionada['type']} (${cuenta_seleccionada['balance']})")
-        
-        # 6. Extraer valores finales
-        balance_usdt = cuenta_seleccionada['balance']
-        cashback = cuenta_seleccionada['cashback']
-        
-        print(f"💰 Balance USDT: ${balance_usdt}")
-        print(f"💵 Cashback: ${cashback}")
-        
-        # 7. Aplicar regla del 50%
-        total_disponible = balance_usdt + cashback
+        # 7. Aplicar regla del 50% (ya calculado arriba, pero lo dejamos explícito)
+        # total_disponible ya fue calculado: balance_usd + balance_usdt + cashback_global
         neto_reparto = round((total_disponible / 2) * 100) / 100
         
-        print(f"\n📊 Total disponible: ${total_disponible}")
-        print(f"📊 Neto 50%: ${neto_reparto}")
+        print(f"\n📊 Neto 50% (Reparto): ${neto_reparto:,.2f}")
         
         # 8. Guardar en Supabase (con manejo robusto de errores)
         print(f"\n💾 Guardando en Supabase...")
@@ -577,7 +670,7 @@ def sincronizar_balance_pst() -> Dict:
                 config_data = {
                     'clave': 'pst_balance_neto',
                     'valor_numerico': neto_reparto,
-                    'descripcion': f'Balance PST.NET (50% de {total_disponible} USDT)',
+                    'descripcion': f'Balance PST.NET (50% de ${total_disponible:,.2f}: USD ${balance_usd:,.2f} + USDT ${balance_usdt:,.2f} + Cashback ${cashback:,.2f})',
                     'updated_at': datetime.now().isoformat()
                 }
                 print(f"   Datos: {config_data}")
@@ -655,12 +748,14 @@ def sincronizar_balance_pst() -> Dict:
         result = {
             'success': True,
             'pst': {
+                'balance_usd': balance_usd,
                 'balance_usdt': balance_usdt,
                 'cashback': cashback,
                 'total_disponible': total_disponible,
-                'neto_reparto': neto_reparto
+                'neto_reparto': neto_reparto,
+                'cuentas_procesadas': cuentas_procesadas
             },
-            'message': f'PST sincronizado: ${neto_reparto} USD (50% de ${total_disponible})',
+            'message': f'PST sincronizado: ${neto_reparto:,.2f} USD (50% de ${total_disponible:,.2f})',
             'fecha': datetime.now().isoformat(),
             'endpoint_usado': api_url,
             'header_format': header_format_usado
@@ -685,6 +780,7 @@ def sincronizar_balance_pst() -> Dict:
         return {
             'success': True,
             'pst': {
+                'balance_usd': 0.0,
                 'balance_usdt': 0.0,
                 'cashback': 0.0,
                 'total_disponible': 0.0,
