@@ -6,7 +6,7 @@ Sincroniza el balance USDT desde PST.NET y calcula la regla del 50%
 
 Autor: Senior Backend Developer
 Fecha: 23/01/2026
-Versión: 3.2.0 - INTEGRACIÓN TOTAL: SEPARACIÓN DE CONCEPTOS
+Versión: 3.2.1 - LIMPIEZA FINAL: RUTAS ALTERNATIVAS + MAPEO PROFESIONAL
 
 MEJORAS DE ROBUSTEZ (v2.0.0 - 27/01/2026):
 ==========================================
@@ -549,6 +549,14 @@ def sincronizar_balance_pst() -> Dict:
         cuentas_procesadas = 0
         errores_procesamiento = []
         
+        # MAPEO DE NOMBRES PROFESIONALES
+        currency_names_map = {
+            1: 'USD',
+            2: 'USDT',
+            15: 'USD Account',
+            # Agregar más si se descubren otros IDs
+        }
+        
         def extraer_balance_por_currency_id(cuenta_item):
             """
             MISIÓN DE RESCATE: Extrae TODOS los balances, imprime currency_id
@@ -580,7 +588,12 @@ def sincronizar_balance_pst() -> Dict:
                         continue
                     
                     currency_id = bal.get('currency_id')
-                    currency_name = bal.get('currency') or bal.get('currency_name') or bal.get('symbol') or 'Unknown'
+                    
+                    # MAPEO PROFESIONAL: Usar nombres del mapa o detectar del JSON
+                    if currency_id in currency_names_map:
+                        currency_name = currency_names_map[currency_id]
+                    else:
+                        currency_name = bal.get('currency') or bal.get('currency_name') or bal.get('symbol') or f'CID_{currency_id}'
                     
                     # Extraer valor del balance
                     balance_valor = bal.get('balance') or bal.get('available') or bal.get('amount') or bal.get('total') or 0
@@ -669,95 +682,117 @@ def sincronizar_balance_pst() -> Dict:
         print(f"{'='*60}")
         
         cashback_acumulado = 0.0
-        cashback_endpoint = 'https://api.pst.net/integration/subscriptions/info'
         
-        try:
-            print(f"📍 Endpoint: {cashback_endpoint}")
-            
-            # Usar los mismos headers que funcionaron para accounts
-            cashback_headers = {
-                'X-API-KEY': PST_API_KEY,
-                'Accept': 'application/json',
-                'Content-Type': 'application/json',
-                'X-Requested-With': 'XMLHttpRequest'
-            }
-            
-            # Intento alternativo si X-API-KEY no funciona
-            if not header_format_usado or 'Bearer' in header_format_usado:
+        # RUTAS A PROBAR (con fallback)
+        cashback_endpoints = [
+            'https://api.pst.net/integration/subscriptions/info',  # Ruta 1 (con /integration/)
+            'https://api.pst.net/subscriptions/info'                # Ruta 2 (sin /integration/)
+        ]
+        
+        cashback_encontrado = False
+        
+        for cashback_endpoint in cashback_endpoints:
+            try:
+                print(f"\n📍 Probando: {cashback_endpoint}")
+                
+                # Usar los mismos headers que funcionaron para accounts
                 cashback_headers = {
-                    'Authorization': f'Bearer {PST_API_KEY}',
+                    'X-API-KEY': PST_API_KEY,
                     'Accept': 'application/json',
                     'Content-Type': 'application/json',
                     'X-Requested-With': 'XMLHttpRequest'
                 }
-            
-            print(f"🔐 Header usado: {'Bearer' if 'Authorization' in cashback_headers else 'X-API-KEY'}")
-            
-            cashback_response = requests.get(
-                cashback_endpoint,
-                headers=cashback_headers,
-                timeout=15
-            )
-            
-            print(f"📥 Status: {cashback_response.status_code}")
-            
-            if cashback_response.ok:
-                cashback_data = cashback_response.json()
-                print(f"✅ Respuesta recibida")
                 
-                # Debug: Mostrar estructura
-                print(f"📄 Estructura: {list(cashback_data.keys()) if isinstance(cashback_data, dict) else 'array'}")
+                # Intento alternativo si X-API-KEY no funciona
+                if not header_format_usado or 'Bearer' in header_format_usado:
+                    cashback_headers = {
+                        'Authorization': f'Bearer {PST_API_KEY}',
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
                 
-                # Buscar approved_cashback en múltiples ubicaciones
-                # Opción 1: Nivel raíz
-                if 'approved_cashback' in cashback_data:
-                    try:
-                        cashback_acumulado = float(cashback_data['approved_cashback'] or 0)
-                        print(f"   📍 Ubicación: data.approved_cashback")
-                    except (ValueError, TypeError):
-                        pass
+                print(f"🔐 Header: {'Bearer' if 'Authorization' in cashback_headers else 'X-API-KEY'}")
                 
-                # Opción 2: data.data
-                if cashback_acumulado == 0 and 'data' in cashback_data and isinstance(cashback_data['data'], dict):
-                    if 'approved_cashback' in cashback_data['data']:
+                cashback_response = requests.get(
+                    cashback_endpoint,
+                    headers=cashback_headers,
+                    timeout=15
+                )
+                
+                print(f"📥 Status: {cashback_response.status_code}")
+                
+                # Si es 404, probar siguiente ruta
+                if cashback_response.status_code == 404:
+                    print(f"⚠️  404 - Probando siguiente ruta...")
+                    continue
+                
+                if cashback_response.ok:
+                    cashback_data = cashback_response.json()
+                    print(f"✅ Respuesta recibida")
+                    
+                    # Debug: Mostrar estructura
+                    print(f"📄 Estructura: {list(cashback_data.keys()) if isinstance(cashback_data, dict) else 'array'}")
+                    
+                    # Buscar approved_cashback en múltiples ubicaciones
+                    # Opción 1: Nivel raíz
+                    if 'approved_cashback' in cashback_data:
                         try:
-                            cashback_acumulado = float(cashback_data['data']['approved_cashback'] or 0)
-                            print(f"   📍 Ubicación: data.data.approved_cashback")
+                            cashback_acumulado = float(cashback_data['approved_cashback'] or 0)
+                            print(f"   📍 Ubicación: data.approved_cashback")
                         except (ValueError, TypeError):
                             pass
-                
-                # Opción 3: Búsqueda flexible (cashback, cashback_balance, etc.)
-                if cashback_acumulado == 0:
-                    for key in ['cashback', 'cashback_balance', 'total_cashback', 'cashBack']:
-                        if key in cashback_data:
+                    
+                    # Opción 2: data.data
+                    if cashback_acumulado == 0 and 'data' in cashback_data and isinstance(cashback_data['data'], dict):
+                        if 'approved_cashback' in cashback_data['data']:
                             try:
-                                cashback_acumulado = float(cashback_data[key] or 0)
-                                print(f"   📍 Ubicación: data.{key}")
-                                break
+                                cashback_acumulado = float(cashback_data['data']['approved_cashback'] or 0)
+                                print(f"   📍 Ubicación: data.data.approved_cashback")
                             except (ValueError, TypeError):
-                                continue
-                
-                print(f"{'='*60}")
-                if cashback_acumulado > 0:
-                    print(f"✅ Encontrado: ${cashback_acumulado:,.2f}")
+                                pass
+                    
+                    # Opción 3: Búsqueda flexible (cashback, cashback_balance, etc.)
+                    if cashback_acumulado == 0:
+                        for key in ['cashback', 'cashback_balance', 'total_cashback', 'cashBack']:
+                            if key in cashback_data:
+                                try:
+                                    cashback_acumulado = float(cashback_data[key] or 0)
+                                    print(f"   📍 Ubicación: data.{key}")
+                                    break
+                                except (ValueError, TypeError):
+                                    continue
+                    
+                    print(f"{'='*60}")
+                    if cashback_acumulado > 0:
+                        print(f"✅ Encontrado: ${cashback_acumulado:,.2f}")
+                        cashback_encontrado = True
+                        break  # Salir del loop, ya encontramos el cashback
+                    else:
+                        print(f"⚠️  No se encontró approved_cashback en respuesta")
+                        # Probar siguiente ruta
+                        continue
+                    
                 else:
-                    print(f"⚠️  No se encontró approved_cashback en respuesta (usando $0.00)")
-                print(f"{'='*60}")
-                
-            else:
-                print(f"⚠️  Status {cashback_response.status_code} - Usando $0.00")
-                print(f"🛡️  BLINDAJE: Continuando con balance de cuentas")
-                cashback_acumulado = 0.0
-                
-        except requests.exceptions.RequestException as e:
-            print(f"⚠️  Error de conexión: {e}")
+                    print(f"⚠️  Status {cashback_response.status_code}")
+                    # Probar siguiente ruta
+                    continue
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️  Error de conexión: {e}")
+                # Probar siguiente ruta
+                continue
+            except Exception as e:
+                print(f"❌ Error inesperado: {e}")
+                # Probar siguiente ruta
+                continue
+        
+        # Si ninguna ruta funcionó
+        if not cashback_encontrado:
+            print(f"\n{'='*60}")
+            print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
             print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (cashback = $0.00)")
-            cashback_acumulado = 0.0
-        except Exception as e:
-            print(f"❌ Error inesperado obteniendo cashback: {e}")
-            import traceback
-            traceback.print_exc()
-            print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (cashback = $0.00)")
+            print(f"{'='*60}")
             cashback_acumulado = 0.0
         
         # RESUMEN FINAL CON SEPARACIÓN DE CONCEPTOS
@@ -788,7 +823,7 @@ def sincronizar_balance_pst() -> Dict:
         print(f"   └─ Cashback:        ${cashback_acumulado:>10,.2f}")
         
         # BLINDAJE: Si no hay balance, retornar modo seguro
-        if total_disponible == 0:
+        if total_general == 0:
             warning_msg = f"No se encontraron balances USD/USDT. Cuentas procesadas: {len(accounts_array)}"
             print(f"\n⚠️  {warning_msg}")
             print(f"🛡️  MODO SEGURO: Retornando balance 0")
