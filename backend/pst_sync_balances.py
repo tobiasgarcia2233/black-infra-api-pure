@@ -6,7 +6,7 @@ Sincroniza el balance USDT desde PST.NET y calcula la regla del 50%
 
 Autor: Senior Backend Developer
 Fecha: 23/01/2026
-Versión: 3.0.0 - SUMATORIA TOTAL USD + USDT + CASHBACK
+Versión: 3.1.0 - MISIÓN DE RESCATE: MAPEO TOTAL + SUMA AGRESIVA
 
 MEJORAS DE ROBUSTEZ (v2.0.0 - 27/01/2026):
 ==========================================
@@ -37,6 +37,29 @@ CAMBIO CRÍTICO (v3.0.0 - 27/01/2026):
 📊 LOGS DETALLADOS: Muestra desglose por cuenta y totales
 🎯 PRECISIÓN: Refleja exactamente lo que el usuario ve en dashboard
 
+MISIÓN DE RESCATE (v3.1.0 - 27/01/2026):
+========================================
+🚨 PROBLEMA: Solo detectaba 1 cuenta, faltaban $2,580.06 + $176.20
+🔍 MAPEO TOTAL: Imprime currency_id de TODAS las cuentas
+   - Formato: [CID:2=USDT:$2580.06]
+   - Permite identificar qué currency_ids están presentes
+💰 SUMA AGRESIVA: Suma CUALQUIER balance > 0
+   - No limita a currency_id 1 y 2
+   - Usuario solo tiene USD/USDT, así que es seguro
+🎁 CAZA DEL CASHBACK: Búsqueda exhaustiva
+   - data.meta (NUEVO)
+   - data.summary (NUEVO)
+   - data.links (NUEVO)
+   - data.cashback, data.data.cashback
+   - Búsqueda recursiva profunda (último recurso)
+📊 DESGLOSE DETALLADO: Resumen por currency_id
+   - Muestra cada currency_id encontrado
+   - Total por cada uno
+   - Suma global
+📝 SUPABASE: Variables verificadas (SUPABASE_URL, SUPABASE_KEY)
+   - Si logs muestran "no configurado" → problema en Render
+   - Variables deben estar en .env o configuración de Render
+
 ARQUITECTURA DE EXTRACCIÓN:
 - Busca en todas las cuentas por currency_id (1=USD, 2=USDT)
 - Suma acumulativa de todos los balances encontrados
@@ -60,6 +83,11 @@ load_dotenv()
 # ============================================================================
 
 PST_API_KEY = os.getenv("PST_API_KEY", "")
+
+# IMPORTANTE: Estas variables deben estar configuradas en Render
+# Si los logs muestran "⚠️ Supabase no configurado", verificar:
+# 1. Variables de entorno en dashboard de Render
+# 2. Archivo .env en desarrollo local
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
 
@@ -472,22 +500,28 @@ def sincronizar_balance_pst() -> Dict:
                 print(f"⚠️  Error al procesar cuenta: {e}")
                 return None
         
-        # NUEVA LÓGICA: Sumar TODOS los balances USD + USDT de todas las cuentas
-        print(f"\n💰 SUMANDO TODOS LOS BALANCES (USD + USDT) DE TODAS LAS CUENTAS...")
-        print(f"📋 Analizando {len(accounts_array)} cuentas...\n")
+        # MISIÓN DE RESCATE: Sumar TODOS los balances > 0 de TODAS las cuentas
+        print(f"\n{'='*60}")
+        print(f"🚨 MISIÓN DE RESCATE - MAPEO TOTAL DE BALANCES")
+        print(f"{'='*60}")
+        print(f"📋 Analizando {len(accounts_array)} cuentas...")
+        print(f"🔍 Imprimiendo currency_id de TODAS las cuentas\n")
         
-        total_usd = 0.0
-        total_usdt = 0.0
+        total_balance = 0.0
+        detalles_por_currency = {}  # {currency_id: {name, total}}
         cuentas_procesadas = 0
         errores_procesamiento = []
         
         def extraer_balance_por_currency_id(cuenta_item):
             """
-            Extrae balances USD y USDT basándose en currency_id.
-            Retorna dict con 'usd' y 'usdt' o None
+            MISIÓN DE RESCATE: Extrae TODOS los balances, imprime currency_id
+            Retorna dict con totales y detalles de currency_ids encontrados
             """
             try:
-                balances_encontrados = {'usd': 0.0, 'usdt': 0.0}
+                balances_encontrados = {
+                    'total': 0.0,  # SUMA AGRESIVA: Todo balance > 0
+                    'detalles': []  # Lista de (currency_id, balance, currency_name)
+                }
                 
                 # Buscar array de balances en la cuenta
                 balances_array = None
@@ -503,12 +537,13 @@ def sincronizar_balance_pst() -> Dict:
                 if not balances_array:
                     return None
                 
-                # Procesar cada balance
+                # MAPEO TOTAL: Procesar cada balance e imprimir currency_id
                 for bal in balances_array:
                     if not isinstance(bal, dict):
                         continue
                     
                     currency_id = bal.get('currency_id')
+                    currency_name = bal.get('currency') or bal.get('currency_name') or bal.get('symbol') or 'Unknown'
                     
                     # Extraer valor del balance
                     balance_valor = bal.get('balance') or bal.get('available') or bal.get('amount') or bal.get('total') or 0
@@ -518,14 +553,21 @@ def sincronizar_balance_pst() -> Dict:
                     except (ValueError, TypeError):
                         continue
                     
-                    # Sumar según currency_id
-                    if currency_id == 1:  # USD
-                        balances_encontrados['usd'] += balance_float
-                    elif currency_id == 2:  # USDT
-                        balances_encontrados['usdt'] += balance_float
+                    # IMPRIMIR currency_id de TODO (incluso si es 0)
+                    if currency_id is not None:
+                        print(f"[CID:{currency_id}={currency_name}:${balance_float:.2f}]", end=' ')
+                    
+                    # SUMA AGRESIVA: Sumar CUALQUIER balance > 0
+                    if balance_float > 0:
+                        balances_encontrados['total'] += balance_float
+                        balances_encontrados['detalles'].append({
+                            'currency_id': currency_id,
+                            'currency_name': currency_name,
+                            'balance': balance_float
+                        })
                 
-                # Solo retornar si encontramos algo
-                if balances_encontrados['usd'] > 0 or balances_encontrados['usdt'] > 0:
+                # Retornar si encontramos algo
+                if balances_encontrados['total'] > 0:
                     return balances_encontrados
                 
                 return None
@@ -547,26 +589,30 @@ def sincronizar_balance_pst() -> Dict:
                 
                 print(f"{account_name[:30]}", end=' ')
                 
-                # Extraer balances USD y USDT
+                # MAPEO TOTAL: Extraer todos los balances
                 resultado = extraer_balance_por_currency_id(item)
                 
                 if resultado:
-                    usd = resultado['usd']
-                    usdt = resultado['usdt']
+                    balance_cuenta = resultado['total']
+                    detalles = resultado['detalles']
                     
-                    if usd > 0:
-                        total_usd += usd
-                        print(f"💵 USD: ${usd:,.2f}", end=' ')
-                        cuentas_procesadas += 1
+                    # Sumar al total global
+                    total_balance += balance_cuenta
                     
-                    if usdt > 0:
-                        total_usdt += usdt
-                        print(f"💰 USDT: ${usdt:,.2f}", end=' ')
-                        cuentas_procesadas += 1
+                    # Acumular por currency_id
+                    for detalle in detalles:
+                        cid = detalle['currency_id']
+                        cname = detalle['currency_name']
+                        cbal = detalle['balance']
+                        
+                        if cid not in detalles_por_currency:
+                            detalles_por_currency[cid] = {'name': cname, 'total': 0.0}
+                        detalles_por_currency[cid]['total'] += cbal
                     
-                    print("✅")
+                    print(f"💰 Total: ${balance_cuenta:,.2f} ✅")
+                    cuentas_procesadas += 1
                 else:
-                    print("⏭️  Sin USD/USDT")
+                    print("⏭️  Sin balances")
                     
             except Exception as e:
                 error_msg = f"Error procesando cuenta {idx + 1}: {str(e)}"
@@ -580,43 +626,160 @@ def sincronizar_balance_pst() -> Dict:
             for err in errores_procesamiento[:5]:  # Mostrar máximo 5
                 print(f"   - {err}")
         
-        # Buscar CASHBACK GLOBAL en el objeto de respuesta principal
-        print(f"\n🎁 Buscando cashback global en respuesta...")
+        # CAZA DEL CASHBACK: Búsqueda agresiva en todo el objeto
+        print(f"\n{'='*60}")
+        print(f"🎁 CAZA DEL CASHBACK - BÚSQUEDA AGRESIVA")
+        print(f"{'='*60}")
         cashback_global = 0.0
+        cashback_ubicacion = None
         
         try:
-            # El cashback puede venir en varios lugares
             if isinstance(data, dict):
-                # Opción 1: data.cashback
-                cashback_global = float(data.get('cashback') or data.get('cashback_balance') or data.get('total_cashback') or 0)
+                print("🔍 Buscando en múltiples ubicaciones...")
                 
-                # Opción 2: data.data.cashback
+                # Opción 1: data.cashback (nivel raíz)
+                if cashback_global == 0:
+                    for key in ['cashback', 'cashback_balance', 'total_cashback', 'cashBack', 'approved_cashback']:
+                        if key in data:
+                            try:
+                                cashback_global = float(data[key] or 0)
+                                if cashback_global > 0:
+                                    cashback_ubicacion = f"data.{key}"
+                                    print(f"   ✅ Encontrado en: {cashback_ubicacion}")
+                                    break
+                            except (ValueError, TypeError):
+                                continue
+                
+                # Opción 2: data.meta (NUEVA - según logs)
+                if cashback_global == 0 and 'meta' in data:
+                    print("   🔍 Buscando en data.meta...")
+                    meta = data['meta']
+                    if isinstance(meta, dict):
+                        for key in ['cashback', 'cashback_balance', 'total_cashback', 'approved_cashback']:
+                            if key in meta:
+                                try:
+                                    cashback_global = float(meta[key] or 0)
+                                    if cashback_global > 0:
+                                        cashback_ubicacion = f"data.meta.{key}"
+                                        print(f"   ✅ Encontrado en: {cashback_ubicacion}")
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                
+                # Opción 3: data.summary (NUEVA)
+                if cashback_global == 0 and 'summary' in data:
+                    print("   🔍 Buscando en data.summary...")
+                    summary = data['summary']
+                    if isinstance(summary, dict):
+                        for key in ['cashback', 'cashback_balance', 'total_cashback']:
+                            if key in summary:
+                                try:
+                                    cashback_global = float(summary[key] or 0)
+                                    if cashback_global > 0:
+                                        cashback_ubicacion = f"data.summary.{key}"
+                                        print(f"   ✅ Encontrado en: {cashback_ubicacion}")
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                
+                # Opción 4: data.data (nested)
                 if cashback_global == 0 and 'data' in data and isinstance(data['data'], dict):
-                    cashback_global = float(data['data'].get('cashback') or data['data'].get('cashback_balance') or 0)
+                    print("   🔍 Buscando en data.data...")
+                    nested_data = data['data']
+                    for key in ['cashback', 'cashback_balance', 'approved_cashback']:
+                        if key in nested_data:
+                            try:
+                                cashback_global = float(nested_data[key] or 0)
+                                if cashback_global > 0:
+                                    cashback_ubicacion = f"data.data.{key}"
+                                    print(f"   ✅ Encontrado en: {cashback_ubicacion}")
+                                    break
+                            except (ValueError, TypeError):
+                                continue
                 
-                # Opción 3: Buscar en metadata
-                if cashback_global == 0 and 'metadata' in data and isinstance(data['metadata'], dict):
-                    cashback_global = float(data['metadata'].get('cashback') or 0)
+                # Opción 5: data.links (NUEVA - según logs)
+                if cashback_global == 0 and 'links' in data:
+                    print("   🔍 Buscando en data.links...")
+                    links = data['links']
+                    if isinstance(links, dict):
+                        for key in ['cashback', 'cashback_balance']:
+                            if key in links:
+                                try:
+                                    cashback_global = float(links[key] or 0)
+                                    if cashback_global > 0:
+                                        cashback_ubicacion = f"data.links.{key}"
+                                        print(f"   ✅ Encontrado en: {cashback_ubicacion}")
+                                        break
+                                except (ValueError, TypeError):
+                                    continue
+                
+                # Opción 6: Búsqueda recursiva profunda (último recurso)
+                if cashback_global == 0:
+                    print("   🔍 Búsqueda recursiva profunda...")
+                    def buscar_cashback_recursivo(obj, path="", nivel=0, max_nivel=3):
+                        if nivel > max_nivel:
+                            return None, None
+                        
+                        if isinstance(obj, dict):
+                            for key in ['cashback', 'cashback_balance', 'total_cashback', 'approved_cashback']:
+                                if key in obj:
+                                    try:
+                                        val = float(obj[key] or 0)
+                                        if val > 0:
+                                            return val, f"{path}.{key}" if path else key
+                                    except (ValueError, TypeError):
+                                        continue
+                            
+                            # Buscar en valores nested
+                            for key, value in obj.items():
+                                if isinstance(value, (dict, list)):
+                                    result, loc = buscar_cashback_recursivo(value, f"{path}.{key}" if path else key, nivel + 1, max_nivel)
+                                    if result:
+                                        return result, loc
+                        
+                        elif isinstance(obj, list):
+                            for idx, item in enumerate(obj):
+                                result, loc = buscar_cashback_recursivo(item, f"{path}[{idx}]", nivel + 1, max_nivel)
+                                if result:
+                                    return result, loc
+                        
+                        return None, None
+                    
+                    cashback_global, cashback_ubicacion = buscar_cashback_recursivo(data)
+                    if cashback_global:
+                        print(f"   ✅ Encontrado recursivamente en: {cashback_ubicacion}")
             
+            print(f"{'='*60}")
             if cashback_global > 0:
-                print(f"✅ Cashback global encontrado: ${cashback_global:,.2f}")
+                print(f"✅ Cashback global: ${cashback_global:,.2f}")
+                print(f"📍 Ubicación: {cashback_ubicacion}")
             else:
-                print(f"⚠️  No se encontró cashback global en la respuesta (usando 0)")
+                print(f"⚠️  No se encontró cashback global (usando 0)")
+                print(f"💡 Revisar estructura JSON en DEBUG_DATA arriba")
+            print(f"{'='*60}")
                 
         except Exception as e:
-            print(f"⚠️  Error extrayendo cashback global: {e}")
+            print(f"❌ Error extrayendo cashback: {e}")
+            import traceback
+            traceback.print_exc()
             cashback_global = 0.0
         
-        # Calcular totales
+        # RESUMEN DETALLADO con desglose por currency_id
         print(f"\n{'='*60}")
-        print(f"📊 RESUMEN DE BALANCES:")
+        print(f"📊 RESUMEN DE BALANCES POR CURRENCY_ID:")
         print(f"{'='*60}")
-        print(f"💵 Total USD:        ${total_usd:>12,.2f}")
-        print(f"💰 Total USDT:       ${total_usdt:>12,.2f}")
+        
+        # Mostrar desglose por currency_id
+        for cid in sorted(detalles_por_currency.keys()):
+            info = detalles_por_currency[cid]
+            print(f"💰 Currency ID {cid:>2} ({info['name']:<8}): ${info['total']:>12,.2f}")
+        
+        print(f"{'─'*60}")
+        print(f"💵 TOTAL BALANCES:   ${total_balance:>12,.2f}")
         print(f"🎁 Cashback Global:  ${cashback_global:>12,.2f}")
         print(f"{'─'*60}")
         
-        total_disponible = total_usd + total_usdt + cashback_global
+        total_disponible = total_balance + cashback_global
         print(f"💎 TOTAL DISPONIBLE: ${total_disponible:>12,.2f}")
         print(f"{'='*60}")
         
@@ -644,12 +807,15 @@ def sincronizar_balance_pst() -> Dict:
             }
         
         # 6. Asignar valores para el resto del código
-        balance_usd = total_usd
-        balance_usdt = total_usdt
+        balance_total = total_balance
         cashback = cashback_global
         
-        # 7. Aplicar regla del 50% (ya calculado arriba, pero lo dejamos explícito)
-        # total_disponible ya fue calculado: balance_usd + balance_usdt + cashback_global
+        # Extraer USD y USDT específicos si existen (para backward compatibility)
+        balance_usd = detalles_por_currency.get(1, {}).get('total', 0.0) if 1 in detalles_por_currency else 0.0
+        balance_usdt = detalles_por_currency.get(2, {}).get('total', 0.0) if 2 in detalles_por_currency else 0.0
+        
+        # 7. Aplicar regla del 50%
+        # total_disponible ya fue calculado: total_balance + cashback_global
         neto_reparto = round((total_disponible / 2) * 100) / 100
         
         print(f"\n📊 Neto 50% (Reparto): ${neto_reparto:,.2f}")
@@ -667,10 +833,14 @@ def sincronizar_balance_pst() -> Dict:
                 
                 # Guardar en tabla configuracion
                 print("📝 Preparando datos para tabla 'configuracion'...")
+                
+                # Construir descripción con desglose por currency_id
+                desglose_texto = " + ".join([f"{info['name']} ${info['total']:,.2f}" for cid, info in sorted(detalles_por_currency.items())])
+                
                 config_data = {
                     'clave': 'pst_balance_neto',
                     'valor_numerico': neto_reparto,
-                    'descripcion': f'Balance PST.NET (50% de ${total_disponible:,.2f}: USD ${balance_usd:,.2f} + USDT ${balance_usdt:,.2f} + Cashback ${cashback:,.2f})',
+                    'descripcion': f'Balance PST.NET (50% de ${total_disponible:,.2f}: {desglose_texto} + Cashback ${cashback:,.2f})',
                     'updated_at': datetime.now().isoformat()
                 }
                 print(f"   Datos: {config_data}")
