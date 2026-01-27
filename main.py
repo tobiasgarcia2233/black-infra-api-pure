@@ -14,6 +14,7 @@ Versión: 1.1.0
 """
 
 import os
+import sys
 from datetime import datetime
 from typing import Dict, Optional
 
@@ -22,6 +23,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from supabase import create_client, Client
+
+# Agregar backend al path para imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'backend'))
+
+# Importar módulo blindado de PST.NET
+from pst_sync_balances import sincronizar_balance_pst
 
 # ============================================================================
 # CONFIGURACIÓN
@@ -119,315 +126,26 @@ async def sync_pst():
     - Aplica la regla del 50% al balance total
     - Guarda todo en Supabase
     """
-    print(f"\n{'='*60}")
-    print(f"🔄 SINCRONIZACIÓN PST.NET - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"{'='*60}\n")
+    print('🚀🚀🚀 INICIANDO SUPER-SYNC V33 - ESTA ES LA VERSION NUEVA 🚀🚀🚀')
     
     try:
-        # 1. Verificar API Key
-        if not PST_API_KEY:
-            raise HTTPException(status_code=500, detail="PST_API_KEY no configurada")
+        # USAR MÓDULO BLINDADO v2.1.0 - backend/pst_sync_balances.py
+        print("📦 Usando módulo blindado: backend/pst_sync_balances.py v2.1.0")
+        resultado = sincronizar_balance_pst()
         
-        print(f"🔑 API Key (primeros 10 chars): {PST_API_KEY[:10]}")
-        print(f"🔑 API Key completa (parcial): {PST_API_KEY[:8]}...{PST_API_KEY[-4:]}")
+        # Verificar si hubo error (aunque siempre retorna success=True en modo seguro)
+        if not resultado.get('success'):
+            raise HTTPException(status_code=500, detail=resultado.get('error', 'Error desconocido'))
         
-        # 2. URLs a probar (estrategia de fallback)
-        # ACTUALIZACIÓN 27/01/2026: Endpoint oficial confirmado por soporte PST.NET
-        api_urls = [
-            "https://api.pst.net/integration/members/accounts",  # Endpoint oficial v2
-            "https://api.pst.net/account/get-all-accounts",      # Fallback v1 (legacy)
-            "https://api.pst.net/api/v1/balances",               # Fallback v0 (deprecated)
-        ]
-        
-        headers = {
-            "Authorization": f"Bearer {PST_API_KEY}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-            "X-Requested-With": "XMLHttpRequest"
-        }
-        
-        response = None
-        success_url = None
-        
-        async with httpx.AsyncClient() as client:
-            for api_url in api_urls:
-                print(f"📍 Probando: {api_url}")
-                
-                try:
-                    test_response = await client.get(api_url, headers=headers, timeout=20)
-                    print(f"📥 Status: {test_response.status_code}")
-                    
-                    # Si es 401, endpoint correcto pero token inválido
-                    if test_response.status_code == 401:
-                        raise HTTPException(
-                            status_code=401,
-                            detail=f"Token inválido. Endpoint correcto: {api_url}"
-                        )
-                    
-                    # Si es 404, probar siguiente
-                    if test_response.status_code == 404:
-                        print("⏭️  404 - Siguiente...")
-                        continue
-                    
-                    # Si es exitoso
-                    if test_response.is_success:
-                        print(f"✅ ENDPOINT CORRECTO: {api_url}")
-                        response = test_response
-                        success_url = api_url
-                        break
-                    
-                    print(f"⚠️  Status {test_response.status_code} - Siguiente...")
-                    
-                except Exception as e:
-                    print(f"❌ Error: {e}")
-                    continue
-        
-        # Si ninguna URL funcionó
-        if not response:
-            raise HTTPException(
-                status_code=500,
-                detail="No se pudo conectar con PST.NET. Todas las rutas fallaron."
-            )
-        
-        # 3. Parsear respuesta
-        print("\n📊 Parseando respuesta...")
-        data = response.json()
-        
-        # 4. Determinar si es respuesta de cuentas o balances
-        accounts_array = []
-        balances_array = []
-        
-        # Caso 1: Respuesta con estructura data.data (Integration API)
-        if isinstance(data, dict) and "data" in data:
-            inner_data = data["data"]
-            
-            # Si data.data es un array de cuentas
-            if isinstance(inner_data, list) and len(inner_data) > 0:
-                # Check si tiene estructura de cuenta
-                if "account_name" in inner_data[0] or "type" in inner_data[0] or "role" in inner_data[0]:
-                    print(f"✓ Estructura data.data con cuentas ({len(inner_data)} cuentas)")
-                    accounts_array = inner_data
-                else:
-                    # Es un array de balances directo
-                    print(f"✓ Estructura data.data con balances ({len(inner_data)} balances)")
-                    balances_array = inner_data
-        
-        # Caso 2: Respuesta con data.accounts
-        elif isinstance(data, dict) and "accounts" in data and isinstance(data["accounts"], list):
-            print(f"✓ Estructura data.accounts ({len(data['accounts'])} cuentas)")
-            accounts_array = data["accounts"]
-        
-        # Caso 3: Array directo de cuentas (get-all-accounts legacy)
-        elif isinstance(data, list) and len(data) > 0 and "account_name" in data[0]:
-            print(f"✓ Array directo de cuentas ({len(data)} cuentas)")
-            accounts_array = data
-        
-        # Caso 4: Array directo de balances
-        elif isinstance(data, list):
-            print(f"✓ Array directo de balances ({len(data)} balances)")
-            balances_array = data
-        
-        # Caso 5: data.balances
-        elif isinstance(data, dict) and "balances" in data and isinstance(data["balances"], list):
-            print(f"✓ Estructura data.balances ({len(data['balances'])} balances)")
-            balances_array = data["balances"]
-        
-        else:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Formato de respuesta inesperado. Estructura: {list(data.keys()) if isinstance(data, dict) else 'array'}"
-            )
-        
-        # Si tenemos cuentas, buscar Master y extraer balances
-        if accounts_array:
-            master_account = None
-            
-            # Buscar cuenta Master o la de mayor balance
-            for acc in accounts_array:
-                acc_name = acc.get("account_name", "")
-                acc_type = (acc.get("type") or acc.get("role") or "").lower()
-                
-                if "master" in acc_name.lower() or "master" in acc_type:
-                    master_account = acc
-                    print(f"✅ Cuenta Master encontrada: {acc_name or acc_type}")
-                    break
-            
-            # Si no hay Master, usar la primera cuenta
-            if not master_account and accounts_array:
-                master_account = accounts_array[0]
-                print(f"⚠️  No hay cuenta Master, usando primera cuenta")
-            
-            # Extraer balances de la cuenta
-            if master_account and "balances" in master_account:
-                balances_array = master_account["balances"]
-                print(f"✓ {len(balances_array)} balances en la cuenta")
-            else:
-                raise HTTPException(
-                    status_code=500,
-                    detail="No se encontraron balances en las cuentas"
-                )
-        
-        # 5. Buscar balance USDT
-        print("\n💰 Buscando USDT...")
-        usdt_balance = None
-        
-        for item in balances_array:
-            currency = item.get("currency") or item.get("asset") or item.get("symbol")
-            if currency == "USDT":
-                usdt_balance = item
-                break
-        
-        if not usdt_balance:
-            currencies = [b.get("currency") or b.get("asset") or b.get("symbol") for b in balances_array]
-            raise HTTPException(
-                status_code=404,
-                detail=f"USDT no encontrado. Disponibles: {', '.join(str(c) for c in currencies if c)}"
-            )
-        
-        print("✅ USDT encontrado")
-        
-        # 6. Extraer valores
-        balance_usdt = float(
-            usdt_balance.get("balance") or 
-            usdt_balance.get("available") or 
-            usdt_balance.get("amount") or 
-            usdt_balance.get("available_balance") or
-            0
-        )
-        cashback = float(
-            usdt_balance.get("cashback_balance") or 
-            usdt_balance.get("cashback") or 
-            usdt_balance.get("rewards") or 
-            usdt_balance.get("reward_balance") or
-            0
-        )
-        
-        print(f"💰 Balance: ${balance_usdt}")
-        print(f"💵 Cashback: ${cashback}")
-        
-        # 6.5. Obtener cashback aprobado desde /subscriptions/info
-        print("\n🎁 Consultando cashback aprobado...")
-        approved_cashback = 0.0
-        subscription_url = "https://api.pst.net/api/v1/subscriptions/info"
-        
-        try:
-            async with httpx.AsyncClient() as client:
-                sub_response = await client.get(subscription_url, headers=headers, timeout=20)
-                print(f"📥 Status subscriptions: {sub_response.status_code}")
-                
-                if sub_response.is_success:
-                    sub_data = sub_response.json()
-                    
-                    # Extraer approved_cashback (viene como string)
-                    approved_cashback_str = sub_data.get("approved_cashback", "0")
-                    
-                    # Si la respuesta tiene estructura data
-                    if isinstance(sub_data, dict) and "data" in sub_data:
-                        approved_cashback_str = sub_data["data"].get("approved_cashback", "0")
-                    
-                    # Convertir a float
-                    try:
-                        approved_cashback = float(approved_cashback_str or "0")
-                        print(f"✅ Cashback aprobado: ${approved_cashback}")
-                    except (ValueError, TypeError):
-                        print(f"⚠️  Error al parsear cashback aprobado: {approved_cashback_str}")
-                        approved_cashback = 0.0
-                else:
-                    print(f"⚠️  No se pudo obtener cashback aprobado: {sub_response.status_code}")
-        except Exception as e:
-            print(f"⚠️  Error al consultar cashback aprobado: {e}")
-        
-        # 7. Aplicar regla del 50%
-        total_disponible = balance_usdt + cashback
-        neto_reparto = round((total_disponible / 2) * 100) / 100
-        
-        print(f"\n📊 Total: ${total_disponible}")
-        print(f"📊 Neto 50%: ${neto_reparto}")
-        print(f"🎁 Cashback aprobado: ${approved_cashback}")
-        
-        # 8. Guardar en Supabase
-        if SUPABASE_URL and SUPABASE_KEY:
-            print("\n💾 Guardando en Supabase...")
-            
-            supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-            
-            # Guardar balance neto en configuracion
-            supabase.table("configuracion").upsert({
-                "clave": "pst_balance_neto",
-                "valor_numerico": neto_reparto,
-                "descripcion": f"Balance PST.NET (50% de {total_disponible} USDT)",
-                "updated_at": datetime.now().isoformat()
-            }, on_conflict="clave").execute()
-            
-            print("✅ Balance neto guardado")
-            
-            # Guardar cashback aprobado en configuracion
-            supabase.table("configuracion").upsert({
-                "clave": "pst_cashback",
-                "valor_numerico": approved_cashback,
-                "descripcion": f"Cashback aprobado de PST.NET",
-                "updated_at": datetime.now().isoformat()
-            }, on_conflict="clave").execute()
-            
-            print("✅ Cashback aprobado guardado")
-            
-            # Guardar en ingresos (un registro por mes usando periodo MM-YYYY)
-            fecha_actual = datetime.now().strftime("%Y-%m-%d")
-            periodo_actual = datetime.now().strftime("%m-%Y")  # Formato MM-YYYY
-            
-            ingreso_existente = supabase.table("ingresos")\
-                .select("id")\
-                .eq("concepto", "PST_REPARTO")\
-                .eq("periodo", periodo_actual)\
-                .limit(1)\
-                .execute()
-            
-            if ingreso_existente.data and len(ingreso_existente.data) > 0:
-                # Actualizar
-                ingreso_id = ingreso_existente.data[0]["id"]
-                supabase.table("ingresos").update({
-                    "monto_usd_total": neto_reparto,
-                    "monto_ars": 0,
-                    "fecha_cobro": fecha_actual,
-                    "periodo": periodo_actual
-                }).eq("id", ingreso_id).execute()
-                print(f"✅ Ingreso actualizado (ID: {ingreso_id}, Periodo: {periodo_actual})")
-            else:
-                # Crear nuevo
-                supabase.table("ingresos").insert({
-                    "concepto": "PST_REPARTO",
-                    "monto_usd_total": neto_reparto,
-                    "monto_ars": 0,
-                    "fecha_cobro": fecha_actual,
-                    "periodo": periodo_actual,
-                    "cliente_id": None
-                }).execute()
-                print(f"✅ Nuevo ingreso creado (Periodo: {periodo_actual})")
-        
-        # 9. Retornar resultado
-        result = {
-            "success": True,
-            "pst": {
-                "balance_usdt": balance_usdt,
-                "cashback": cashback,
-                "approved_cashback": approved_cashback,
-                "total_disponible": total_disponible,
-                "neto_reparto": neto_reparto
-            },
-            "message": f"PST sincronizado: ${neto_reparto} USD (50% de ${total_disponible})",
-            "fecha": datetime.now().isoformat(),
-            "endpoint_usado": success_url
-        }
-        
-        print(f"\n✅ Sincronización exitosa")
-        print(f"{'='*60}\n")
-        
-        return JSONResponse(content=result, status_code=200)
+        # Retornar resultado
+        return JSONResponse(content=resultado, status_code=200)
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"\n❌ Error: {str(e)}")
+        print(f"\n❌ Error en endpoint /sync-pst: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(
             status_code=500,
             detail=f"Error inesperado: {str(e)}"
