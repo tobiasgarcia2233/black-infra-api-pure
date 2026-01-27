@@ -56,7 +56,7 @@ MISIÓN DE RESCATE (v3.1.0 - 27/01/2026):
    - Muestra cada currency_id encontrado
    - Total por cada uno
    - Suma global
-📝 SUPABASE: Variables verificadas (SUPABASE_URL, SUPABASE_KEY)
+📝 SUPABASE: Variables verificadas (SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
    - Si logs muestran "no configurado" → problema en Render
    - Variables deben estar en .env o configuración de Render
 
@@ -126,7 +126,7 @@ PST_API_KEY = os.getenv("PST_API_KEY", "")
 # 1. Variables de entorno en dashboard de Render
 # 2. Archivo .env en desarrollo local
 SUPABASE_URL = os.getenv("SUPABASE_URL", "")
-SUPABASE_KEY = os.getenv("SUPABASE_KEY", "")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 
 # ============================================================================
@@ -868,13 +868,13 @@ def sincronizar_balance_pst() -> Dict:
         # 8. Guardar en Supabase (con manejo robusto de errores)
         print(f"\n💾 Guardando en Supabase...")
         
-        if not SUPABASE_URL or not SUPABASE_KEY:
+        if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
             print("⚠️  Supabase no configurado, saltando guardado...")
         else:
             try:
                 from supabase import create_client
                 
-                supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+                supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
                 
                 # Guardar en tabla configuracion
                 print("📝 Preparando datos para tabla 'configuracion'...")
