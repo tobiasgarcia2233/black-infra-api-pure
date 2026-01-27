@@ -324,3 +324,28 @@ UPDATE clientes SET dia_cobro = 15 WHERE estado = 'Activo' AND dia_cobro IS NULL
 - **Arquitectura:** Backend FastAPI en Render con IP fija `74.220.49.249`.
 - **Archivo Actualizado:** `backend/pst_sync_balances.py`
 - **Compatibilidad:** Mantiene soporte retrocompatible con estructura de respuesta anterior.
+
+## REINICIO DE CONTEXTO - MÓDULO PST (v37.0)
+- **Objetivo:** Resolver Error 500 en el parseo de 12 cuentas de Integración.
+- **Estrategia:** Implementación de "Safe Extraction" y Logs de inspección RAW.
+- **Regla:** Ningún error de parseo debe tumbar el proceso (Fail-safe).
+- **Backend:** FastAPI en Render / Rama: Main.
+
+## ARQUITECTURA ELITE DESPLEGADA (v53.0)
+- **Estado:** Implementación de v3.0.0 (Sumatoria Total) + Arquitectura Limpia.
+- **Blindaje:** Creado `ARCHITECTURE_RULES.md` y `verify_architecture.sh`.
+- **Lógica de Negocio:** Suma acumulada de USD (id:1), USDT (id:2) y Cashback Global.
+- **Resultado:** El sistema refleja el 100% del capital real del Dashboard de PST.NET.
+- **Hito:** Eliminación total de deuda técnica y duplicación de código.
+
+## DESGLOSE DE ACTIVOS (v59.0)
+- **Lógica:** Separación de balances operativos vs. cashback acumulado.
+- **Nuevos Endpoints:** Integración oficial de `/subscriptions/info`.
+- **UI/UX:** El backend ahora entrega campos diferenciados para mejorar la visibilidad en el Dashboard.
+- **Estado:** Implementando la doble llamada con manejo de errores independiente.
+
+## ESTADO DE VISUALIZACIÓN (v63.0)
+- **Cuentas:** ✅ Sincronización exitosa de CID 2 y CID 15 ($4,532.27 total).
+- **Reparto:** ✅ Cálculo del 50% ($2,266.13) verificado en el cartel de éxito.
+- **Frontend:** 🛠️ Pendiente integrar PST Balance en el 'Neto USD' global del Dashboard.
+- **Cashback:** 🔍 En espera de respuesta de soporte por error 401 en /subscriptions/info.

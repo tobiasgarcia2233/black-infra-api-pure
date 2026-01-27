@@ -895,67 +895,13 @@ def sincronizar_balance_pst() -> Dict:
                 ).execute()
                 
                 print(f"✅ Configuración guardada exitosamente")
+                print(f"📊 Balance PST guardado: ${neto_reparto:,.2f} USD")
                 
             except Exception as e:
                 error_msg = f"Error al guardar en tabla 'configuracion': {str(e)}"
                 print(f"❌ {error_msg}")
                 import traceback
                 traceback.print_exc()
-                # Continuar con ingresos aunque falle configuracion
-            
-            # Guardar en tabla ingresos (un registro por mes)
-            try:
-                print("\n📝 Preparando ingreso PST para Supabase...")
-                fecha_actual = datetime.now().strftime('%Y-%m-%d')
-                primer_dia_mes = datetime.now().replace(day=1).strftime('%Y-%m-%d')
-                
-                print(f"   Fecha actual: {fecha_actual}")
-                print(f"   Primer día del mes: {primer_dia_mes}")
-                
-                # Buscar ingreso existente del mes
-                print("🔍 Buscando ingreso PST existente del mes...")
-                ingreso_existente = supabase.table('ingresos')\
-                    .select('id, monto_usd_total')\
-                    .eq('concepto', 'PST_REPARTO')\
-                    .gte('fecha_cobro', primer_dia_mes)\
-                    .limit(1)\
-                    .execute()
-                
-                if ingreso_existente.data and len(ingreso_existente.data) > 0:
-                    # Actualizar existente
-                    ingreso_id = ingreso_existente.data[0]['id']
-                    print(f"📝 Actualizando ingreso existente (ID: {ingreso_id})...")
-                    
-                    update_data = {
-                        'monto_usd_total': neto_reparto,
-                        'monto_ars': 0,
-                        'fecha_cobro': fecha_actual
-                    }
-                    print(f"   Datos: {update_data}")
-                    
-                    supabase.table('ingresos').update(update_data).eq('id', ingreso_id).execute()
-                    print(f"✅ Ingreso PST actualizado exitosamente (ID: {ingreso_id})")
-                else:
-                    # Crear nuevo
-                    print("📝 Creando nuevo ingreso PST...")
-                    insert_data = {
-                        'concepto': 'PST_REPARTO',
-                        'monto_usd_total': neto_reparto,
-                        'monto_ars': 0,
-                        'fecha_cobro': fecha_actual,
-                        'cliente_id': None
-                    }
-                    print(f"   Datos: {insert_data}")
-                    
-                    supabase.table('ingresos').insert(insert_data).execute()
-                    print(f"✅ Nuevo ingreso PST creado exitosamente")
-                    
-            except Exception as e:
-                error_msg = f"Error al guardar en tabla 'ingresos': {str(e)}"
-                print(f"❌ {error_msg}")
-                import traceback
-                traceback.print_exc()
-                print("⚠️  Continuando a pesar del error en ingresos...")
         
         # 9. Retornar resultado exitoso con separación de conceptos
         result = {
