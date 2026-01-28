@@ -750,21 +750,46 @@ def sincronizar_balance_pst() -> Dict:
                     data_preview = json.dumps(cashback_data, indent=2, default=str)[:800]
                     print(f"🔍 Preview de respuesta:\n{data_preview}...")
                     
-                    # EXTRACCIÓN OFICIAL: approved_cashback y hold_cashback (strings)
-                    # Nivel raíz
-                    if 'approved_cashback' in cashback_data:
+                    # EXTRACCIÓN OFICIAL: approved_cashback y hold_cashback (dentro de 'data')
+                    # Buscar en data.approved_cashback (estructura confirmada por logs de Render)
+                    if 'data' in cashback_data and isinstance(cashback_data['data'], dict):
                         try:
-                            cashback_aprobado = float(str(cashback_data['approved_cashback'] or '0').replace(',', ''))
-                            print(f"   ✅ approved_cashback: ${cashback_aprobado:,.2f}")
+                            approved_raw = cashback_data['data'].get('approved_cashback', '0')
+                            cashback_aprobado = float(str(approved_raw or '0').replace(',', ''))
+                            print(f"   ✅ data.approved_cashback: ${cashback_aprobado:,.2f}")
                         except (ValueError, TypeError) as e:
                             print(f"   ⚠️ Error convirtiendo approved_cashback: {e}")
-                    
-                    if 'hold_cashback' in cashback_data:
+                        
                         try:
-                            cashback_retenido = float(str(cashback_data['hold_cashback'] or '0').replace(',', ''))
-                            print(f"   ✅ hold_cashback: ${cashback_retenido:,.2f}")
+                            hold_raw = cashback_data['data'].get('hold_cashback', '0')
+                            cashback_retenido = float(str(hold_raw or '0').replace(',', ''))
+                            print(f"   ✅ data.hold_cashback: ${cashback_retenido:,.2f}")
                         except (ValueError, TypeError) as e:
                             print(f"   ⚠️ Error convirtiendo hold_cashback: {e}")
+                    
+                    # Fallback: Buscar en nivel raíz (por si la estructura cambia)
+                    elif 'approved_cashback' in cashback_data:
+                        try:
+                            cashback_aprobado = float(str(cashback_data['approved_cashback'] or '0').replace(',', ''))
+                            print(f"   ✅ approved_cashback (raíz): ${cashback_aprobado:,.2f}")
+                        except (ValueError, TypeError) as e:
+                            print(f"   ⚠️ Error: {e}")
+                        
+                        if 'hold_cashback' in cashback_data:
+                            try:
+                                cashback_retenido = float(str(cashback_data['hold_cashback'] or '0').replace(',', ''))
+                                print(f"   ✅ hold_cashback (raíz): ${cashback_retenido:,.2f}")
+                            except (ValueError, TypeError) as e:
+                                print(f"   ⚠️ Error: {e}")
+                    
+                    # Fallback para endpoint /summary: data.summary.cashback_sum
+                    elif 'summary' in cashback_data and isinstance(cashback_data['summary'], dict):
+                        try:
+                            cashback_sum = cashback_data['summary'].get('cashback_sum', 0)
+                            cashback_aprobado = float(str(cashback_sum or '0').replace(',', ''))
+                            print(f"   ✅ summary.cashback_sum: ${cashback_aprobado:,.2f}")
+                        except (ValueError, TypeError) as e:
+                            print(f"   ⚠️ Error: {e}")
                     
                     # Si se encontró el approved_cashback, marcar como exitoso
                     if cashback_aprobado > 0 or cashback_retenido > 0:
@@ -776,7 +801,7 @@ def sincronizar_balance_pst() -> Dict:
                         cashback_encontrado = True
                         break  # Salir del loop, ya encontramos el cashback
                     else:
-                        print(f"⚠️  No se encontraron campos approved_cashback o hold_cashback")
+                        print(f"⚠️  No se encontraron campos de cashback en esta respuesta")
                         # Probar siguiente ruta
                         continue
                     
@@ -797,11 +822,7 @@ def sincronizar_balance_pst() -> Dict:
         # Si ninguna ruta funcionó
         if not cashback_encontrado:
             print(f"\n{'='*60}")
-            if endpoint_bloqueado:
-                print(f"🔒 ENDPOINT SECURED: El endpoint de cashback requiere permisos adicionales")
-                print(f"   Contactá a soporte de PST.NET para habilitar acceso")
-            else:
-                print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
+            print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
             print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (cashback = $0.00)")
             print(f"{'='*60}")
             cashback_aprobado = 0.0
