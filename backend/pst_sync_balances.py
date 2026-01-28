@@ -676,20 +676,22 @@ def sincronizar_balance_pst() -> Dict:
             for err in errores_procesamiento[:5]:  # Mostrar máximo 5
                 print(f"   - {err}")
         
-        # ENDPOINT DEDICADO: Obtener cashback acumulado desde /subscriptions/info
+        # ENDPOINT DEDICADO: Obtener cashback acumulado desde transactions-v2/summary
         print(f"\n{'='*60}")
-        print(f"🎁 RECOLECTANDO CASHBACK ACUMULADO...")
+        print(f"🎁 RECOLECTANDO CASHBACK ACUMULADO (NUEVO ENDPOINT)...")
         print(f"{'='*60}")
         
         cashback_acumulado = 0.0
         
-        # RUTAS A PROBAR (con fallback)
+        # NUEVO ENDPOINT confirmado por soporte PST.NET
         cashback_endpoints = [
-            'https://api.pst.net/integration/subscriptions/info',  # Ruta 1 (con /integration/)
-            'https://api.pst.net/subscriptions/info'                # Ruta 2 (sin /integration/)
+            'https://api.pst.net/integration/members/transactions-v2/summary',  # Endpoint oficial v2
+            'https://api.pst.net/integration/subscriptions/info',                # Fallback 1
+            'https://api.pst.net/subscriptions/info'                             # Fallback 2
         ]
         
         cashback_encontrado = False
+        endpoint_bloqueado = False
         
         for cashback_endpoint in cashback_endpoints:
             try:
@@ -722,6 +724,14 @@ def sincronizar_balance_pst() -> Dict:
                 
                 print(f"📥 Status: {cashback_response.status_code}")
                 
+                # Si es 401/403 (endpoint secured/bloqueado)
+                if cashback_response.status_code in [401, 403]:
+                    print(f"🔒 ENDPOINT SECURED (Status {cashback_response.status_code})")
+                    print(f"   El endpoint requiere permisos adicionales o está bloqueado")
+                    endpoint_bloqueado = True
+                    # Probar siguiente ruta
+                    continue
+                
                 # Si es 404, probar siguiente ruta
                 if cashback_response.status_code == 404:
                     print(f"⚠️  404 - Probando siguiente ruta...")
@@ -731,34 +741,43 @@ def sincronizar_balance_pst() -> Dict:
                     cashback_data = cashback_response.json()
                     print(f"✅ Respuesta recibida")
                     
-                    # Debug: Mostrar estructura
+                    # Debug: Mostrar estructura completa
                     print(f"📄 Estructura: {list(cashback_data.keys()) if isinstance(cashback_data, dict) else 'array'}")
                     
-                    # Buscar approved_cashback en múltiples ubicaciones
+                    # Debug extra: Mostrar preview de la respuesta
+                    import json
+                    data_preview = json.dumps(cashback_data, indent=2, default=str)[:500]
+                    print(f"🔍 Preview de respuesta:\n{data_preview}...")
+                    
+                    # Búsqueda exhaustiva de cashback en múltiples ubicaciones
                     # Opción 1: Nivel raíz
-                    if 'approved_cashback' in cashback_data:
-                        try:
-                            cashback_acumulado = float(cashback_data['approved_cashback'] or 0)
-                            print(f"   📍 Ubicación: data.approved_cashback")
-                        except (ValueError, TypeError):
-                            pass
+                    for key in ['approved_cashback', 'cashback', 'cashback_balance', 'total_cashback', 'cashBack', 'cashback_amount']:
+                        if key in cashback_data:
+                            try:
+                                cashback_acumulado = float(cashback_data[key] or 0)
+                                print(f"   📍 Ubicación: data.{key}")
+                                break
+                            except (ValueError, TypeError):
+                                continue
                     
                     # Opción 2: data.data
                     if cashback_acumulado == 0 and 'data' in cashback_data and isinstance(cashback_data['data'], dict):
-                        if 'approved_cashback' in cashback_data['data']:
-                            try:
-                                cashback_acumulado = float(cashback_data['data']['approved_cashback'] or 0)
-                                print(f"   📍 Ubicación: data.data.approved_cashback")
-                            except (ValueError, TypeError):
-                                pass
-                    
-                    # Opción 3: Búsqueda flexible (cashback, cashback_balance, etc.)
-                    if cashback_acumulado == 0:
-                        for key in ['cashback', 'cashback_balance', 'total_cashback', 'cashBack']:
-                            if key in cashback_data:
+                        for key in ['approved_cashback', 'cashback', 'cashback_balance', 'total_cashback', 'cashBack', 'cashback_amount']:
+                            if key in cashback_data['data']:
                                 try:
-                                    cashback_acumulado = float(cashback_data[key] or 0)
-                                    print(f"   📍 Ubicación: data.{key}")
+                                    cashback_acumulado = float(cashback_data['data'][key] or 0)
+                                    print(f"   📍 Ubicación: data.data.{key}")
+                                    break
+                                except (ValueError, TypeError):
+                                    continue
+                    
+                    # Opción 3: Búsqueda en summary (para endpoint transactions-v2/summary)
+                    if cashback_acumulado == 0 and 'summary' in cashback_data and isinstance(cashback_data['summary'], dict):
+                        for key in ['approved_cashback', 'cashback', 'cashback_balance', 'total_cashback', 'cashBack', 'cashback_amount']:
+                            if key in cashback_data['summary']:
+                                try:
+                                    cashback_acumulado = float(cashback_data['summary'][key] or 0)
+                                    print(f"   📍 Ubicación: data.summary.{key}")
                                     break
                                 except (ValueError, TypeError):
                                     continue
@@ -790,7 +809,12 @@ def sincronizar_balance_pst() -> Dict:
         # Si ninguna ruta funcionó
         if not cashback_encontrado:
             print(f"\n{'='*60}")
-            print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
+            if endpoint_bloqueado:
+                print(f"🔒 ENDPOINT SECURED: El endpoint de cashback requiere permisos adicionales")
+                print(f"   Contactá a soporte de PST.NET para habilitar acceso a:")
+                print(f"   • /integration/members/transactions-v2/summary")
+            else:
+                print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
             print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (cashback = $0.00)")
             print(f"{'='*60}")
             cashback_acumulado = 0.0

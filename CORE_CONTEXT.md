@@ -349,3 +349,10 @@ UPDATE clientes SET dia_cobro = 15 WHERE estado = 'Activo' AND dia_cobro IS NULL
 - **Reparto:** ✅ Cálculo del 50% ($2,266.13) verificado en el cartel de éxito.
 - **Frontend:** 🛠️ Pendiente integrar PST Balance en el 'Neto USD' global del Dashboard.
 - **Cashback:** 🔍 En espera de respuesta de soporte por error 401 en /subscriptions/info.
+
+## UX OPTIMIZATION: QUICK SYNC (v83.0)
+- **Funcionalidad:** Botón de sincronización directa en la tarjeta de PST.NET (Hero Card).
+- **Lógica:** Vinculación del trigger de UI con el script de balance de PST.
+- **Feedback:** Implementación de estados de carga (loading) para mejorar la respuesta al usuario.
+- **Hito:** Control total del flujo de capital desde la pantalla principal.
+
