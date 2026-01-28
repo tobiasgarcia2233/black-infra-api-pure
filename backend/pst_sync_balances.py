@@ -682,13 +682,13 @@ def sincronizar_balance_pst() -> Dict:
         print(f"{'='*60}")
         
         cashback_aprobado = 0.0
+        cashback_sum_total = 0.0
         cashback_retenido = 0.0
         
-        # ENDPOINT OFICIAL confirmado y habilitado por soporte PST.NET
+        # PASO 1: Obtener approved_cashback de /subscriptions/info
         cashback_endpoints = [
             'https://api.pst.net/integration/subscriptions/info',                # Endpoint oficial (PRIMARIO)
             'https://api.pst.net/subscriptions/info',                            # Fallback sin /integration/
-            'https://api.pst.net/integration/members/transactions-v2/summary'    # Fallback de emergencia
         ]
         
         cashback_encontrado = False
@@ -750,59 +750,29 @@ def sincronizar_balance_pst() -> Dict:
                     data_preview = json.dumps(cashback_data, indent=2, default=str)[:800]
                     print(f"🔍 Preview de respuesta:\n{data_preview}...")
                     
-                    # EXTRACCIÓN OFICIAL: approved_cashback y hold_cashback (dentro de 'data')
+                    # EXTRACCIÓN OFICIAL: approved_cashback (dentro de 'data')
                     # Buscar en data.approved_cashback (estructura confirmada por logs de Render)
                     if 'data' in cashback_data and isinstance(cashback_data['data'], dict):
                         try:
                             approved_raw = cashback_data['data'].get('approved_cashback', '0')
                             cashback_aprobado = float(str(approved_raw or '0').replace(',', ''))
                             print(f"   ✅ data.approved_cashback: ${cashback_aprobado:,.2f}")
+                            cashback_encontrado = True
+                            break  # Ya encontramos el approved, salir del loop
                         except (ValueError, TypeError) as e:
                             print(f"   ⚠️ Error convirtiendo approved_cashback: {e}")
-                        
-                        try:
-                            hold_raw = cashback_data['data'].get('hold_cashback', '0')
-                            cashback_retenido = float(str(hold_raw or '0').replace(',', ''))
-                            print(f"   ✅ data.hold_cashback: ${cashback_retenido:,.2f}")
-                        except (ValueError, TypeError) as e:
-                            print(f"   ⚠️ Error convirtiendo hold_cashback: {e}")
                     
-                    # Fallback: Buscar en nivel raíz (por si la estructura cambia)
+                    # Fallback: Buscar en nivel raíz
                     elif 'approved_cashback' in cashback_data:
                         try:
                             cashback_aprobado = float(str(cashback_data['approved_cashback'] or '0').replace(',', ''))
                             print(f"   ✅ approved_cashback (raíz): ${cashback_aprobado:,.2f}")
+                            cashback_encontrado = True
+                            break
                         except (ValueError, TypeError) as e:
                             print(f"   ⚠️ Error: {e}")
-                        
-                        if 'hold_cashback' in cashback_data:
-                            try:
-                                cashback_retenido = float(str(cashback_data['hold_cashback'] or '0').replace(',', ''))
-                                print(f"   ✅ hold_cashback (raíz): ${cashback_retenido:,.2f}")
-                            except (ValueError, TypeError) as e:
-                                print(f"   ⚠️ Error: {e}")
-                    
-                    # Fallback para endpoint /summary: data.summary.cashback_sum
-                    elif 'summary' in cashback_data and isinstance(cashback_data['summary'], dict):
-                        try:
-                            cashback_sum = cashback_data['summary'].get('cashback_sum', 0)
-                            cashback_aprobado = float(str(cashback_sum or '0').replace(',', ''))
-                            print(f"   ✅ summary.cashback_sum: ${cashback_aprobado:,.2f}")
-                        except (ValueError, TypeError) as e:
-                            print(f"   ⚠️ Error: {e}")
-                    
-                    # Si se encontró el approved_cashback, marcar como exitoso
-                    if cashback_aprobado > 0 or cashback_retenido > 0:
-                        print(f"{'='*60}")
-                        print(f"✅ CASHBACK ENCONTRADO:")
-                        print(f"   💰 Aprobado (para reparto): ${cashback_aprobado:,.2f}")
-                        print(f"   🔒 Retenido (próximo mes):  ${cashback_retenido:,.2f}")
-                        print(f"   📊 Total visible:           ${cashback_aprobado + cashback_retenido:,.2f}")
-                        cashback_encontrado = True
-                        break  # Salir del loop, ya encontramos el cashback
                     else:
-                        print(f"⚠️  No se encontraron campos de cashback en esta respuesta")
-                        # Probar siguiente ruta
+                        print(f"⚠️  No se encontró approved_cashback en esta respuesta")
                         continue
                     
                 else:
@@ -822,11 +792,179 @@ def sincronizar_balance_pst() -> Dict:
         # Si ninguna ruta funcionó
         if not cashback_encontrado:
             print(f"\n{'='*60}")
-            print(f"⚠️  No se pudo obtener cashback de ninguna ruta")
-            print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (cashback = $0.00)")
+            print(f"⚠️  No se pudo obtener approved_cashback")
+            print(f"🛡️  BLINDAJE: Continuando con balance de cuentas (approved = $0.00)")
             print(f"{'='*60}")
             cashback_aprobado = 0.0
-            cashback_retenido = 0.0
+        
+        # PASO 2: Obtener cashback_sum de /summary para calcular el Hold
+        # FÓRMULA FORZADA: Hold = cashback_sum (de /summary) - approved_cashback (de /info)
+        print(f"\n{'='*60}")
+        print(f"📊 OBTENIENDO CASHBACK_SUM DESDE /SUMMARY...")
+        print(f"{'='*60}")
+        
+        summary_endpoint = 'https://api.pst.net/integration/members/transactions-v2/summary'
+        
+        try:
+            print(f"📍 Endpoint: {summary_endpoint}")
+            
+            summary_headers = {
+                'X-API-KEY': PST_API_KEY,
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'X-Requested-With': 'XMLHttpRequest'
+            }
+            
+            if not header_format_usado or 'Bearer' in header_format_usado:
+                summary_headers = {
+                    'Authorization': f'Bearer {PST_API_KEY}',
+                    'Accept': 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            
+            print(f"🔐 Header: {'Bearer' if 'Authorization' in summary_headers else 'X-API-KEY'}")
+            
+            summary_response = requests.get(
+                summary_endpoint,
+                headers=summary_headers,
+                timeout=15
+            )
+            
+            print(f"📥 Status: {summary_response.status_code}")
+            
+            if summary_response.ok:
+                summary_data = summary_response.json()
+                print(f"✅ Respuesta recibida")
+                
+                # Debug: Mostrar JSON completo para encontrar cashback_sum
+                import json
+                summary_full = json.dumps(summary_data, indent=2, default=str)
+                print(f"🔍 RESPUESTA COMPLETA DE /SUMMARY:\n{summary_full}\n")
+                
+                # BÚSQUEDA EXHAUSTIVA DE cashback_sum
+                cashback_sum_total = 0.0
+                
+                # Intentar múltiples rutas posibles
+                rutas_intentadas = []
+                
+                # Ruta 1: data.summary.cashback_sum
+                if 'data' in summary_data and isinstance(summary_data['data'], dict):
+                    if 'summary' in summary_data['data'] and isinstance(summary_data['data']['summary'], dict):
+                        if 'cashback_sum' in summary_data['data']['summary']:
+                            val = summary_data['data']['summary']['cashback_sum']
+                            rutas_intentadas.append(f"data.summary.cashback_sum = {val}")
+                            try:
+                                cashback_sum_total = float(str(val or '0').replace(',', ''))
+                                print(f"   ✅ Encontrado en data.summary.cashback_sum: ${cashback_sum_total:,.2f}")
+                            except (ValueError, TypeError):
+                                pass
+                    
+                    # Ruta 2: data.cashback_sum
+                    if cashback_sum_total == 0.0 and 'cashback_sum' in summary_data['data']:
+                        val = summary_data['data']['cashback_sum']
+                        rutas_intentadas.append(f"data.cashback_sum = {val}")
+                        try:
+                            cashback_sum_total = float(str(val or '0').replace(',', ''))
+                            print(f"   ✅ Encontrado en data.cashback_sum: ${cashback_sum_total:,.2f}")
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Ruta 3: summary.cashback_sum (nivel raíz)
+                if cashback_sum_total == 0.0 and 'summary' in summary_data and isinstance(summary_data['summary'], dict):
+                    if 'cashback_sum' in summary_data['summary']:
+                        val = summary_data['summary']['cashback_sum']
+                        rutas_intentadas.append(f"summary.cashback_sum = {val}")
+                        try:
+                            cashback_sum_total = float(str(val or '0').replace(',', ''))
+                            print(f"   ✅ Encontrado en summary.cashback_sum: ${cashback_sum_total:,.2f}")
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Ruta 4: cashback_sum (nivel raíz directo)
+                if cashback_sum_total == 0.0 and 'cashback_sum' in summary_data:
+                    val = summary_data['cashback_sum']
+                    rutas_intentadas.append(f"cashback_sum (raíz) = {val}")
+                    try:
+                        cashback_sum_total = float(str(val or '0').replace(',', ''))
+                        print(f"   ✅ Encontrado en cashback_sum (raíz): ${cashback_sum_total:,.2f}")
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Ruta 5: Búsqueda recursiva profunda
+                if cashback_sum_total == 0.0:
+                    def buscar_cashback_sum_recursivo(obj, path="root"):
+                        """Busca cashback_sum en cualquier nivel de anidación"""
+                        if isinstance(obj, dict):
+                            if 'cashback_sum' in obj:
+                                return obj['cashback_sum'], f"{path}.cashback_sum"
+                            for key, value in obj.items():
+                                result = buscar_cashback_sum_recursivo(value, f"{path}.{key}")
+                                if result:
+                                    return result
+                        elif isinstance(obj, list):
+                            for idx, item in enumerate(obj):
+                                result = buscar_cashback_sum_recursivo(item, f"{path}[{idx}]")
+                                if result:
+                                    return result
+                        return None
+                    
+                    resultado_busqueda = buscar_cashback_sum_recursivo(summary_data)
+                    if resultado_busqueda:
+                        val, ruta = resultado_busqueda
+                        rutas_intentadas.append(f"{ruta} = {val}")
+                        try:
+                            cashback_sum_total = float(str(val or '0').replace(',', ''))
+                            print(f"   ✅ Encontrado en {ruta}: ${cashback_sum_total:,.2f}")
+                        except (ValueError, TypeError):
+                            pass
+                
+                # Log de diagnóstico
+                print(f"\n🔍 RUTAS INTENTADAS:")
+                for ruta in rutas_intentadas:
+                    print(f"   - {ruta}")
+                
+                if cashback_sum_total == 0.0:
+                    print(f"⚠️  WARNING: No se encontró cashback_sum en ninguna ruta")
+                    print(f"⚠️  Claves disponibles en raíz: {list(summary_data.keys())}")
+                
+                print(f"\n💰 CASHBACK_SUM FINAL: ${cashback_sum_total:,.2f}")
+            else:
+                print(f"⚠️  Error {summary_response.status_code}: No se pudo obtener summary")
+                print(f"📄 Response body: {summary_response.text[:500]}")
+                cashback_sum_total = 0.0
+                
+        except Exception as e:
+            print(f"❌ Error obteniendo summary: {e}")
+            import traceback
+            traceback.print_exc()
+            cashback_sum_total = 0.0
+        
+        # CALCULAR HOLD (fórmula FORZADA confirmada por soporte)
+        # Hold = cashback_sum (de /summary) - approved_cashback (de /info)
+        cashback_retenido = max(0, cashback_sum_total - cashback_aprobado)
+        
+        print(f"\n{'='*60}")
+        print(f"🧮 CÁLCULO DE HOLD CASHBACK (FÓRMULA FORZADA):")
+        print(f"{'='*60}")
+        print(f"   📊 Cashback Sum (total de /summary):  ${cashback_sum_total:,.2f}")
+        print(f"   💰 Approved (depositado de /info):    ${cashback_aprobado:,.2f}")
+        print(f"   ➖ FÓRMULA: Hold = Sum - Approved")
+        print(f"   ➖ CÁLCULO: ${cashback_sum_total:,.2f} - ${cashback_aprobado:,.2f} = ${cashback_retenido:,.2f}")
+        print(f"   🔒 Retenido (Hold):                   ${cashback_retenido:,.2f}")
+        print(f"{'='*60}")
+        
+        # Validación de la fórmula
+        if cashback_sum_total == 0.0 and cashback_aprobado > 0:
+            print(f"\n⚠️  ALERTA: cashback_sum es $0.00 pero approved_cashback es ${cashback_aprobado:,.2f}")
+            print(f"⚠️  Esto indica que el endpoint /summary no está retornando datos correctos")
+            print(f"⚠️  El hold debería ser: ${cashback_sum_total:,.2f} - ${cashback_aprobado:,.2f} = NEGATIVO (ajustado a $0.00)")
+        elif cashback_sum_total > 0 and cashback_aprobado == 0:
+            print(f"\n⚠️  ALERTA: cashback_sum es ${cashback_sum_total:,.2f} pero approved_cashback es $0.00")
+            print(f"⚠️  El hold completo sería: ${cashback_retenido:,.2f}")
+        elif cashback_sum_total > 0 and cashback_aprobado > 0:
+            print(f"\n✅ VALIDACIÓN: Ambos valores son > $0, cálculo correcto")
+            print(f"✅ Hold = ${cashback_sum_total:,.2f} - ${cashback_aprobado:,.2f} = ${cashback_retenido:,.2f}")
         
         # RESUMEN FINAL CON SEPARACIÓN DE CONCEPTOS
         print(f"\n{'='*60}")
@@ -933,6 +1071,31 @@ def sincronizar_balance_pst() -> Dict:
                 print(f"✅ Configuración guardada exitosamente")
                 print(f"📊 Balance PST guardado: ${neto_reparto:,.2f} USD")
                 
+                # Guardar hold cashback para visualización en frontend ("Próximo Ingreso")
+                print(f"\n💾 Guardando Hold Cashback en Supabase...")
+                print(f"   📊 Cashback Sum (de /summary): ${cashback_sum_total:,.2f}")
+                print(f"   💰 Approved (de /info):        ${cashback_aprobado:,.2f}")
+                print(f"   🔒 Hold (retenido):            ${cashback_retenido:,.2f}")
+                print(f"   📈 Próximo ingreso (50%):      ${cashback_retenido / 2:,.2f}")
+                
+                hold_config = {
+                    'clave': 'pst_cashback_hold',
+                    'valor_numerico': cashback_retenido,
+                    'descripcion': f'Hold Cashback de PST.NET (Sum: ${cashback_sum_total:,.2f} - Approved: ${cashback_aprobado:,.2f})',
+                    'updated_at': datetime.now().isoformat()
+                }
+                
+                print(f"   Datos a guardar: {hold_config}")
+                
+                hold_result = supabase.table('configuracion').upsert(
+                    hold_config,
+                    on_conflict='clave'
+                ).execute()
+                
+                print(f"✅ Hold cashback guardado exitosamente en Supabase")
+                print(f"   🔒 Hold guardado: ${cashback_retenido:,.2f} USD")
+                print(f"   📈 Próximo ingreso estimado (50%): ${cashback_retenido / 2:,.2f} USD")
+                
             except Exception as e:
                 error_msg = f"Error al guardar en tabla 'configuracion': {str(e)}"
                 print(f"❌ {error_msg}")
@@ -947,6 +1110,7 @@ def sincronizar_balance_pst() -> Dict:
                 'balance_cuentas_total': balance_cuentas_total,
                 'cashback_aprobado': cashback_aprobado,      # Para el reparto (se suma)
                 'cashback_retenido': cashback_retenido,      # Hold (NO se suma, solo visualización)
+                'cashback_sum_total': cashback_sum_total,    # Total de /summary (para debugging)
                 'total_general': total_general,              # Cuentas + Aprobado
                 'neto_reparto': neto_reparto,                # 50% del total_general
                 
@@ -962,7 +1126,7 @@ def sincronizar_balance_pst() -> Dict:
                 'desglose_por_currency': {str(cid): {'name': info['name'], 'total': info['total']} 
                                          for cid, info in detalles_por_currency.items()}
             },
-            'message': f'PST sincronizado: ${neto_reparto:,.2f} USD (50% de ${total_general:,.2f}) | Cuentas: ${balance_cuentas_total:,.2f} | Aprobado: ${cashback_aprobado:,.2f} | Hold: ${cashback_retenido:,.2f}',
+            'message': f'PST sincronizado: ${neto_reparto:,.2f} USD (50% de ${total_general:,.2f}) | Cuentas: ${balance_cuentas_total:,.2f} | Aprobado: ${cashback_aprobado:,.2f} | Retenido (Hold): ${cashback_retenido:,.2f}',
             'fecha': datetime.now().isoformat(),
             'endpoint_usado': api_url,
             'header_format': header_format_usado
