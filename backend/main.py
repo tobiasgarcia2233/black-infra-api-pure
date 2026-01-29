@@ -4,11 +4,14 @@ Main API Server - BLACK INFRASTRUCTURE
 =======================================
 Servidor FastAPI consolidado con todos los endpoints.
 
+⚠️  ESTE ES EL ARCHIVO PRINCIPAL - Render ejecuta: uvicorn main:app
+
 Autor: Senior Backend Developer
 Fecha: 28/01/2026
 Versión: 1.2.0 - CONSOLIDADO
 
 ENDPOINTS:
+- GET  / - Root con lista de endpoints
 - GET  /health - Health check
 - POST /sync-pst - Sincronizar balance PST.NET
 - POST /snapshot-mes-anterior - Crear snapshot del mes anterior
