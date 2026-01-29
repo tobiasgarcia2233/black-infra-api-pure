@@ -987,14 +987,25 @@ def sincronizar_balance_pst() -> Dict:
         print(f"   • Retenido (Hold):     ${cashback_retenido:>10,.2f}")
         print(f"   • Total Visible:       ${cashback_aprobado + cashback_retenido:>10,.2f}")
         
-        # 3. Total general (SOLO con approved_cashback, hold NO se suma)
-        total_general = balance_cuentas_total + cashback_aprobado
+        # ============================================================
+        # CÁLCULO CONSERVADOR v105.0 - 28/01/2026
+        # ============================================================
+        # El Neto Total debe ser 100% conservador y solo incluir:
+        # - Balance de cuentas principales (ID 15 + ID 2)
+        # - Cashback se trackea por separado, NO se suma al neto
+        
+        # NETO TOTAL = Solo balance de cuentas (sin cashback)
+        total_para_neto = balance_cuentas_total  # ← SIN cashback aprobado
+        
         print(f"\n{'='*60}")
-        print(f"💎 TOTAL GENERAL:     ${total_general:>10,.2f}")
+        print(f"💰 CÁLCULO CONSERVADOR - NETO TOTAL:")
         print(f"{'='*60}")
-        print(f"   └─ Cuentas:                ${balance_cuentas_total:>10,.2f}")
-        print(f"   └─ Cashback Aprobado:      ${cashback_aprobado:>10,.2f}")
-        print(f"   └─ Cashback Hold (no suma): ${cashback_retenido:>10,.2f}")
+        print(f"   Balance Cuentas (ID 15+2):  ${balance_cuentas_total:>10,.2f}")
+        print(f"   Cashback Aprobado (tracking): ${cashback_aprobado:>10,.2f} ← NO suma al neto")
+        print(f"   Cashback Hold (tracking):     ${cashback_retenido:>10,.2f} ← NO suma al neto")
+        print(f"   ──────────────────────────────────────")
+        print(f"   💎 BASE PARA NETO:          ${total_para_neto:>10,.2f}")
+        print(f"{'='*60}")
         
         # BLINDAJE: Si no hay balance, retornar modo seguro
         if total_general == 0:
@@ -1019,21 +1030,30 @@ def sincronizar_balance_pst() -> Dict:
                 'modo_seguro': True
             }
         
-        # 6. Aplicar regla del 50% sobre el TOTAL GENERAL
-        # total_general = balance_cuentas_total + cashback_acumulado
-        neto_reparto = round((total_general / 2) * 100) / 100
+        # 6. Aplicar regla del 50% SOLO sobre balance de cuentas (SIN cashback)
+        neto_reparto = round((total_para_neto / 2) * 100) / 100
+        
+        # Cashback al 50% (separado, solo para tracking)
+        cashback_aprobado_50 = round((cashback_aprobado / 2) * 100) / 100
+        cashback_retenido_50 = round((cashback_retenido / 2) * 100) / 100
         
         print(f"\n{'='*60}")
-        print(f"📊 APLICANDO REGLA DEL 50%:")
+        print(f"📊 APLICANDO REGLA DEL 50% (CONSERVADOR):")
         print(f"{'='*60}")
-        print(f"   Total General:      ${total_general:>10,.2f}")
+        print(f"   Balance Cuentas:    ${total_para_neto:>10,.2f}")
         print(f"   ÷ 2 (50%)          ────────────────")
-        print(f"   💰 NETO REPARTO:    ${neto_reparto:>10,.2f}")
+        print(f"   💰 NETO REPARTO:    ${neto_reparto:>10,.2f} ← Solo cuentas")
+        print(f"\n   📊 CASHBACK (TRACKING, NO SUMA AL NETO):")
+        print(f"   Aprobado (50%):     ${cashback_aprobado_50:>10,.2f}")
+        print(f"   Hold (50%):         ${cashback_retenido_50:>10,.2f}")
         print(f"{'='*60}")
         
         # 7. Variables para backward compatibility y resultado
         balance_total = balance_cuentas_total
-        cashback = cashback_aprobado  # Solo el aprobado (el hold NO se suma al reparto)
+        cashback = 0.0  # NO se incluye en el cálculo del neto (tracking separado)
+        
+        # Total general para info (no afecta el neto)
+        total_general = balance_cuentas_total + cashback_aprobado  # Solo para información
         
         # Extraer USD y USDT específicos si existen
         balance_usd = detalles_por_currency.get(1, {}).get('total', 0.0) if 1 in detalles_por_currency else 0.0
@@ -1053,23 +1073,39 @@ def sincronizar_balance_pst() -> Dict:
                 # Guardar en tabla configuracion
                 print("📝 Preparando datos para tabla 'configuracion'...")
                 
-                # Descripción con separación clara de conceptos
+                # 1. Guardar balance NETO (solo cuentas, SIN cashback)
                 config_data = {
                     'clave': 'pst_balance_neto',
                     'valor_numerico': neto_reparto,
-                    'descripcion': f'PST.NET (50% de ${total_general:,.2f}) | Cuentas: ${balance_cuentas_total:,.2f} | Aprobado: ${cashback_aprobado:,.2f} | Hold: ${cashback_retenido:,.2f}',
+                    'descripcion': f'PST.NET Cuentas (50% de ${total_para_neto:,.2f}) | Balance ID 15+2 | SIN cashback',
                     'updated_at': datetime.now().isoformat()
                 }
-                print(f"   Datos: {config_data}")
+                print(f"   Datos (Balance Neto): {config_data}")
                 
-                print("🔄 Ejecutando upsert en 'configuracion'...")
+                print("🔄 Ejecutando upsert en 'configuracion' (pst_balance_neto)...")
                 config_result = supabase.table('configuracion').upsert(
                     config_data, 
                     on_conflict='clave'
                 ).execute()
                 
-                print(f"✅ Configuración guardada exitosamente")
-                print(f"📊 Balance PST guardado: ${neto_reparto:,.2f} USD")
+                print(f"✅ Balance Neto guardado: ${neto_reparto:,.2f} USD (solo cuentas)")
+                
+                # 2. Guardar cashback APROBADO (separado, para tracking)
+                cashback_aprobado_config = {
+                    'clave': 'pst_cashback_aprobado',
+                    'valor_numerico': cashback_aprobado,  # Valor completo (100%)
+                    'descripcion': f'Cashback Aprobado de PST.NET | Tracking (NO suma al neto)',
+                    'updated_at': datetime.now().isoformat()
+                }
+                print(f"   Datos (Cashback Aprobado): {cashback_aprobado_config}")
+                
+                print("🔄 Ejecutando upsert en 'configuracion' (pst_cashback_aprobado)...")
+                cashback_aprobado_result = supabase.table('configuracion').upsert(
+                    cashback_aprobado_config,
+                    on_conflict='clave'
+                ).execute()
+                
+                print(f"✅ Cashback Aprobado guardado: ${cashback_aprobado:,.2f} USD (tracking)")
                 
                 # Guardar hold cashback para visualización en frontend ("Próximo Ingreso")
                 print(f"\n💾 Guardando Hold Cashback en Supabase...")
@@ -1102,31 +1138,35 @@ def sincronizar_balance_pst() -> Dict:
                 import traceback
                 traceback.print_exc()
         
-        # 9. Retornar resultado exitoso con separación de conceptos
+        # 9. Retornar resultado exitoso con CÁLCULO CONSERVADOR
         result = {
             'success': True,
             'pst': {
-                # Separación de conceptos
+                # CÁLCULO CONSERVADOR v105.0
                 'balance_cuentas_total': balance_cuentas_total,
-                'cashback_aprobado': cashback_aprobado,      # Para el reparto (se suma)
-                'cashback_retenido': cashback_retenido,      # Hold (NO se suma, solo visualización)
-                'cashback_sum_total': cashback_sum_total,    # Total de /summary (para debugging)
-                'total_general': total_general,              # Cuentas + Aprobado
-                'neto_reparto': neto_reparto,                # 50% del total_general
+                'cashback_aprobado': cashback_aprobado,      # Tracking (NO se suma al neto)
+                'cashback_retenido': cashback_retenido,      # Hold (tracking)
+                'cashback_sum_total': cashback_sum_total,    # Total de /summary
+                'total_general': total_general,              # Cuentas + Aprobado (solo info)
+                'neto_reparto': neto_reparto,                # 50% SOLO de cuentas (SIN cashback)
+                
+                # Valores al 50% para frontend
+                'cashback_aprobado_50': cashback_aprobado_50,
+                'cashback_retenido_50': cashback_retenido_50,
                 
                 # Backward compatibility
                 'balance_usd': balance_usd,
                 'balance_usdt': balance_usdt,
-                'cashback': cashback,                        # Alias de cashback_aprobado
-                'cashback_acumulado': cashback_aprobado,     # Alias legacy
-                'total_disponible': total_general,           # Alias de total_general
+                'cashback': 0.0,                             # NO se suma (tracking separado)
+                'cashback_acumulado': 0.0,                   # NO se suma (tracking separado)
+                'total_disponible': balance_cuentas_total,   # Solo cuentas, sin cashback
                 
                 # Metadata
                 'cuentas_procesadas': cuentas_procesadas,
                 'desglose_por_currency': {str(cid): {'name': info['name'], 'total': info['total']} 
                                          for cid, info in detalles_por_currency.items()}
             },
-            'message': f'PST sincronizado: ${neto_reparto:,.2f} USD (50% de ${total_general:,.2f}) | Cuentas: ${balance_cuentas_total:,.2f} | Aprobado: ${cashback_aprobado:,.2f} | Retenido (Hold): ${cashback_retenido:,.2f}',
+            'message': f'PST sincronizado (CONSERVADOR): Neto=${neto_reparto:,.2f} (50% de cuentas) | Cashback Tracking: Aprobado=${cashback_aprobado:,.2f}, Hold=${cashback_retenido:,.2f}',
             'fecha': datetime.now().isoformat(),
             'endpoint_usado': api_url,
             'header_format': header_format_usado
