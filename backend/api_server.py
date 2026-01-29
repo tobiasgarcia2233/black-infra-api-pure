@@ -14,6 +14,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pst_sync_balances import sincronizar_balance_pst
+from snapshot_manager import tomar_snapshot_mes_anterior, obtener_snapshot, listar_snapshots
 from dotenv import load_dotenv
 
 # Cargar variables de entorno
@@ -55,9 +56,12 @@ async def root():
     return {
         "status": "ok",
         "service": "BLACK Infrastructure API",
-        "version": "1.0.0",
+        "version": "1.1.0",
         "endpoints": {
             "/sync-pst": "Sincroniza balance de PST.NET",
+            "/snapshot-mes-anterior": "Crea snapshot del mes anterior",
+            "/snapshot/{periodo}": "Obtiene snapshot de un periodo (MM-YYYY)",
+            "/snapshots": "Lista todos los snapshots disponibles",
             "/health": "Health check",
         }
     }
@@ -111,6 +115,130 @@ async def sync_pst():
                 'success': False,
                 'error': str(e),
                 'message': 'Error interno del servidor'
+            },
+            status_code=500
+        )
+
+
+@app.post("/snapshot-mes-anterior")
+async def crear_snapshot():
+    """
+    Crea un snapshot del mes anterior con los valores actuales de PST.NET.
+    
+    Este endpoint debe ejecutarse el día 1 de cada mes para preservar
+    la historia financiera.
+    
+    Returns:
+        JSONResponse: Resultado del snapshot
+    """
+    try:
+        print("\n" + "="*60)
+        print("📸 API REQUEST: /snapshot-mes-anterior")
+        print("="*60)
+        
+        resultado = tomar_snapshot_mes_anterior()
+        
+        if resultado.get('success'):
+            return JSONResponse(
+                content=resultado,
+                status_code=200
+            )
+        else:
+            return JSONResponse(
+                content=resultado,
+                status_code=500
+            )
+            
+    except Exception as e:
+        print(f"❌ Error en /snapshot-mes-anterior: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return JSONResponse(
+            content={
+                'success': False,
+                'error': str(e),
+                'message': 'Error al crear snapshot'
+            },
+            status_code=500
+        )
+
+
+@app.get("/snapshot/{periodo}")
+async def obtener_snapshot_periodo(periodo: str):
+    """
+    Obtiene el snapshot de un periodo específico.
+    
+    Args:
+        periodo: Periodo en formato MM-YYYY (ej: '12-2025')
+    
+    Returns:
+        JSONResponse: Datos del snapshot o error 404
+    """
+    try:
+        print(f"\n📸 API REQUEST: /snapshot/{periodo}")
+        
+        snapshot = obtener_snapshot(periodo)
+        
+        if snapshot:
+            return JSONResponse(
+                content={
+                    'success': True,
+                    'snapshot': snapshot
+                },
+                status_code=200
+            )
+        else:
+            return JSONResponse(
+                content={
+                    'success': False,
+                    'error': f'No se encontró snapshot para el periodo {periodo}'
+                },
+                status_code=404
+            )
+            
+    except Exception as e:
+        print(f"❌ Error en /snapshot/{periodo}: {e}")
+        
+        return JSONResponse(
+            content={
+                'success': False,
+                'error': str(e)
+            },
+            status_code=500
+        )
+
+
+@app.get("/snapshots")
+async def listar_todos_snapshots():
+    """
+    Lista todos los snapshots disponibles, ordenados por fecha descendente.
+    
+    Returns:
+        JSONResponse: Lista de snapshots
+    """
+    try:
+        print("\n📸 API REQUEST: /snapshots")
+        
+        snapshots = listar_snapshots()
+        
+        return JSONResponse(
+            content={
+                'success': True,
+                'count': len(snapshots),
+                'snapshots': snapshots
+            },
+            status_code=200
+        )
+            
+    except Exception as e:
+        print(f"❌ Error en /snapshots: {e}")
+        
+        return JSONResponse(
+            content={
+                'success': False,
+                'error': str(e),
+                'snapshots': []
             },
             status_code=500
         )

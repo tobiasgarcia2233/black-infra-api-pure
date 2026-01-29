@@ -356,3 +356,67 @@ UPDATE clientes SET dia_cobro = 15 WHERE estado = 'Activo' AND dia_cobro IS NULL
 - **Feedback:** Implementación de estados de carga (loading) para mejorar la respuesta al usuario.
 - **Hito:** Control total del flujo de capital desde la pantalla principal.
 
+## FÓRMULA DE HOLD DEFINIDA (v98.0)
+- **Cálculo Hold:** cashback_sum (Summary) - approved_cashback (Info).
+- **Lógica de Reparto:** 50% aplicado a todos los niveles de PST.
+- **UI:** Inclusión de la tarjeta Ámbar de ancho completo para 'Próximo Ingreso'.
+- **Hito:** Eliminación total de discrepancias manuales en el flujo de cashback.
+
+## SISTEMA DE ATRIBUCIÓN TEMPORAL (v103.0)
+- **Lógica:** Cobro Adelantado (Caja Hoy / Servicio Mañana).
+- **Vistas UI:** Toggle entre Liquidez (Verde) y Performance (Azul).
+- **DB:** Migración ejecutada con columna `mes_aplicado` y funciones de cálculo automático.
+- **Hito:** Dashboard blindado contra confusiones de flujo de caja vs utilidad neta.
+
+## COMPARTIMENTOS ESTANCOS (v104.0 - 28/01/2026)
+- **Concepto:** Cada mes es un "compartimento" aislado e independiente.
+- **Selector Único:** Eliminado el toggle Liquidez/Performance. Solo existe el selector de mes.
+- **Filtrado:** SIEMPRE por `mes_aplicado` (atribución temporal de servicios).
+- **Reglas de Visualización:**
+  - **Mes Actual:** Neto = Honorarios del mes + Saldo PST al 50%
+  - **Meses Futuros/Pasados:** Neto = SOLO ingresos - gastos del mes (sin PST)
+- **PST.NET:** El saldo PST es un valor REAL del momento actual, NO una proyección. Solo suma en el mes en curso.
+- **Hold (Próximo Ingreso):** Se muestra como tarjeta informativa en todos los meses, pero NO suma al neto en meses futuros.
+- **Aislamiento Total:** No se arrastra saldo PST ni histórico de meses anteriores a meses futuros.
+
+## CÁLCULO CONSERVADOR - NETO TOTAL (v105.0 - 28/01/2026)
+- **Principio:** El Neto Total (Hero Card Verde) solo incluye dinero 100% líquido y disponible.
+- **Fórmula del Neto:**
+  - Honorarios del mes (Ingresos - Gastos) = 100%
+  - Saldo PST ID 15 + ID 2 = 50% aplicado
+  - **EXCLUIDO:** Cashback (Aprobado o Hold) NO suma al Neto Total
+- **Cashback Stacked (Nuevo Bloque):**
+  - Componente visual separado del Hero Card
+  - **Cashback Aprobado:** 50% de `pst_cashback_aprobado`
+  - **Cashback en Hold:** 50% de `pst_cashback_hold`
+  - **Propósito:** Tracking de "dinero por caer"
+  - **Comportamiento:** Cuando PST deposite en cuentas principales, el balance sube y el cashback baja automáticamente
+- **Visibilidad:** El bloque "Cashback Stacked" solo se muestra en el mes actual.
+- **Backend (pst_sync_balances.py v3.2.2):**
+  - `pst_balance_neto` = 50% SOLO del balance de cuentas (ID 15 + ID 2)
+  - `pst_cashback_aprobado` = Cashback aprobado completo (100%) para tracking
+  - `pst_cashback_hold` = Cashback en hold completo (100%) para tracking
+  - El frontend aplica el 50% al mostrar los valores de cashback
+
+## SISTEMA DE SNAPSHOTS MENSUALES (v106.0 - 28/01/2026)
+- **Propósito:** Preservar la historia financiera mes a mes sin que se pisen los datos viejos.
+- **Tabla:** `historial_saldos` - Almacena "fotografías" del estado financiero al cierre de cada mes.
+- **Snapshot de Cierre:**
+  - Se ejecuta el día 1 de cada mes (automático vía Cron Job)
+  - Guarda: balance de cuentas, neto reparto, cashback aprobado, cashback hold
+  - Los snapshots son INMUTABLES (no se modifican una vez creados)
+- **Persistencia del Cashback Stack:**
+  - El bloque "Cashback Stacked" SIEMPRE muestra valor ACTUAL de la API
+  - NO depende del mes seleccionado (es un valor vivo)
+  - Hasta que PST deposite, el valor permanece visible
+- **Navegación de Meses:**
+  - **Mes Actual:** Datos EN VIVO de PST.NET
+  - **Meses Pasados:** Datos del SNAPSHOT histórico (badge "📸 Snapshot")
+  - **Meses Futuros:** Solo proyecciones de ingresos (badge "🔮 Proyección")
+- **Endpoints API:**
+  - `POST /snapshot-mes-anterior` - Crear snapshot del mes anterior
+  - `GET /snapshot/{periodo}` - Obtener snapshot específico (MM-YYYY)
+  - `GET /snapshots` - Listar todos los snapshots
+- **Automatización:** Cron Job que ejecuta snapshot el día 1 de cada mes a las 02:00 AM
+- **Fallback:** Si no existe snapshot para un mes, usa datos en vivo con advertencia
+
